@@ -2,22 +2,26 @@
 SetWorkingDir %A_ScriptDir% ; Ensure a consistent starting directory
 #Warn                       ; Enable warnings to assist with detecting common errors
 #NoEnv                      ; Recommended for performance and compatibility with future AutoHotkey releases
-#KeyHistory 0               ; Disable the key history (This script will mostly handle password)
-ListLines Off               ; Omit recently executed lines from history (Same again)
 #SingleInstance Force       ; Force: reload script if already running
 #Persistent                 ; Do not exit script when actions are finished
 StringCaseSense On          ; Default is case insensitive match and replace -> NOPE
+;SetTitleMatchMode, regex    ; I wonder how many milliseconds this costs...
+/*@Ahk2Exe-Keep
+#KeyHistory 0               ; Disable the key history (This script will mostly handle password)
+ListLines Off               ; Omit recently executed lines from history (Same again)
+*/
 
 ; Replace default tray menu & icons
 Menu, Tray, Tip, Paste clipboard text contents with alt-shift-v
-Menu, Tray, NoStandard
-Menu, Tray, Add, Suspend HotKeys, PauseResume
-Menu, Tray, Add, Exit, QuitScript
+
 ; Images under creative commons License CC BY 3.0 CH by Pirate Party Switzerland
 ; https://www.piratenpartei.ch/logos-und-fotos/
 ;@Ahk2Exe-AddResource PPCH_outlined_dark.ico
 ;@Ahk2Exe-SetMainIcon PPCH_outlined_light.ico
 /*@Ahk2Exe-Keep
+	Menu, Tray, NoStandard
+	Menu, Tray, Add, Suspend HotKeys, PauseResume
+	Menu, Tray, Add, Exit, QuitScript
 	Menu, Tray, Icon, %A_ScriptFullPath%, 6, 1
 */
 ;@Ahk2Exe-IgnoreBegin
