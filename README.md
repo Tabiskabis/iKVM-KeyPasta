@@ -40,6 +40,20 @@ I will not publish executable binaries on the internet. Use [AutoHotKey](https:/
    - Pretty much only the Linux console (not GUI) and Windows (but nnot all programs) support alt code input.
    - Unicode support (untested) depends intirely on the remote OS and application
 
+ - UI Access: Send keystrokes to elevated (admin) windows (alternative to running as admin)
+   When compiling to exe, make a self-signed developer certificate, trust it, sign the exe with it, then move the signed exe into a protected folder, i.e. %ProgramFiles%\*
+   PowerShell:
+```
+$cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=My AHK UIAccess" -CertStoreLocation Cert:\CurrentUser\My
+$tmp = "$env:TEMP\ahk_uia.cer"
+Export-Certificate -Cert $cert -FilePath $tmp | Out-Null
+Import-Certificate -FilePath $tmp -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+Import-Certificate -FilePath $tmp -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+Remove-Item $tmp
+$installedcert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object Subject -eq "CN=My AHK UIAccess"
+Set-AuthenticodeSignature -FilePath "iKVM-SwissBugPasta.exe" -Certificate $installedcert
+```
+
 ## Licenses
 
 ### App icons `PPCH*.ico`
