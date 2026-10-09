@@ -1,0 +1,5 @@
+Premain-Class: keypasta.Agent
+Agent-Class: keypasta.Agent
+Boot-Class-Path: iKVM-KeyPasta-agent.jar
+Implementation-Title: iKVM-KeyPasta agent
+Implementation-Version: 2.0.0

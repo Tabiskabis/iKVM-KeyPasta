@@ -1,6 +1,6 @@
-﻿; iKVM-SwissBugPasta: keyboard fix and clipboard paste for the Supermicro/ATEN iKVM viewers
+; iKVM-KeyPasta: keyboard fix and clipboard paste for the Supermicro/ATEN iKVM viewers
 ; (Java app and HTML5 browser viewer). See README.md.
-; https://github.com/Tabiskabis/iKVM-SwissBugPasta
+; https://github.com/Tabiskabis/iKVM-KeyPasta
 
 #Requires AutoHotkey v2.0
 #Warn                       ; Enable warnings to assist with detecting common errors
@@ -20,14 +20,23 @@ ListLines DebugMode
 LogLines := []              ; iKVM Java log (see Log)
 LogGui := 0
 TrayIconShown := ""         ; icon currently shown (see SetTrayIcon)
-SetTrayIcon(false)          ; right away, before the restarts for more rights (see RestartPrivileged)
+ExitOnly := false           ; /exit: only close the running instance (install.cmd, uninstall.cmd), see CloseOtherInstances
+for Arg in A_Args
+    if (Arg = "/exit")
+        ExitOnly := true
+if (ExitOnly) {             ; no tray icon, no hotkeys while it waits for the other one to close
+    A_IconHidden := true
+    Suspend true
+} else
+    SetTrayIcon(false)      ; right away, before the restarts for more rights (see RestartPrivileged)
 
 ; EXE informational properties
 ;@Ahk2Exe-SetProductName AutoHotKey
 ;@Ahk2Exe-SetLegalTrademarks AHK executable: autohotkey.com
 ;@Ahk2Exe-SetCopyright AHK script by Tabiskabis: CC BY 3.0
-;@Ahk2Exe-SetDescription iKVM-SwissBugPasta: Supermicro/ATEN iKVM keyboard fix and clipboard paste
-;@Ahk2Exe-SetFileVersion 1.0.0.0
+;@Ahk2Exe-SetDescription iKVM-KeyPasta: Supermicro/ATEN iKVM keyboard fix and clipboard paste
+;@Ahk2Exe-SetFileVersion 2.0.0.0
+;@Ahk2Exe-SetProductVersion 2.0.0
 
 ; If code signing is not feasible, uncomment this to automatically request elevation when launched
 ;;@Ahk2Exe-UpdateManifest 1
@@ -77,6 +86,12 @@ ElevationStage := ""
 CtrlAltDelQuietUntil := ""  ; Ctrl+Alt+Del question turned off until then (YYYYMMDDHH24MISS), see ^<!End
 ElevationFailed := false    ; got refused, but more rights weren't possible: don't try again
 LoadedByScript := Map()     ; layouts this script loaded (KLID -> handle), unloaded on exit, see QuietLayout
+; Read by #HotIf conditions, which can run before the auto-execute section reaches their code
+; (e.g. while CloseOtherInstances waits): set here, before anything that can wait
+CtrlSent := false           ; left Ctrl sent down, see *LCtrl
+CtrlPending := false        ; left Ctrl is being held back right now, see *LCtrl
+JavaPasting := false        ; pasting into iKVM Java, see PasteIntoKvm
+JavaPasteSc := 0            ; the paste hotkey's key while it's held, see JavaKey
 for Arg in A_Args {
     if (RegExMatch(Arg, "i)^/elevate-stage=(\w+)$", &Match))
         ElevationStage := Match[1]
@@ -106,8 +121,10 @@ PasteHotkeyText .= StrLen(PasteKey) = 1 ? StrUpper(PasteKey) : PasteKey
 ; Like #SingleInstance Force: close an instance of this script that's already running, as .ahk
 ; or compiled .exe, from any folder (two of them would both remap the keys). Windows refuses
 ; that if it runs with more rights (UI Access or admin, see RestartPrivileged): then restart
-; with more rights, too. If that's not possible, leave it running and exit.
+; with more rights, too. If that's not possible, leave it running and exit (/exit: with exit code 1).
+; Returns false if one is still running (it didn't close, not even by ProcessClose).
 CloseOtherInstances() {
+    Closed := true
     MyName := StrLower(RegExReplace(A_ScriptName, "\.[^.]*$"))
     DetectHiddenWindows true
     for Hwnd in WinGetList("ahk_class AutoHotkey") {
@@ -126,13 +143,21 @@ CloseOtherInstances() {
             if (Err.Number != 5)    ; ERROR_ACCESS_DENIED
                 continue
             RestartPrivileged(false)    ; returns only if that's not possible
-            MsgBox "iKVM-SwissBugPasta is already running with more rights (UI Access or admin)."
-                . " Exit it from its tray menu to restart it.", "iKVM-SwissBugPasta", 0x40
+            if (ExitOnly)
+                ExitApp 1
+            MsgBox "iKVM-KeyPasta is already running with more rights (UI Access or admin)."
+                . " Exit it from its tray menu to restart it.", "iKVM-KeyPasta", 0x40
             ExitApp
         }
-        WinWaitClose("ahk_id " Hwnd, , 5)
+        ; its exit (OnExit: layouts, Java's key table) takes a moment; hung: closed by force
+        if (!WinWaitClose("ahk_id " Hwnd, , 10)) {
+            try ProcessClose(WinGetPID("ahk_id " Hwnd))
+            if (!WinWaitClose("ahk_id " Hwnd, , 2))
+                Closed := false
+        }
     }
     DetectHiddenWindows false
+    return Closed
 }
 
 HasUIAccess() {
@@ -163,6 +188,7 @@ RestartPrivileged(Notify := true) {
         . " /set:PasteNonAscii=" PasteNonAscii
         . " /set:RemoteWindows=" RemoteWindows
         . " /set:CtrlAltDelQuietUntil=" CtrlAltDelQuietUntil
+        . (ExitOnly ? " /exit" : "")
     if (ElevationStage = "" and !A_IsCompiled) {
         UiaPath := RegExReplace(A_AhkPath, "i)(?<!_UIA)\.exe$", "_UIA.exe")
         if (UiaPath != A_AhkPath and FileExist(UiaPath)) {
@@ -183,8 +209,8 @@ RestartPrivileged(Notify := true) {
     }
     BuildTrayMenu()
     if (Notify)
-        TrayTip "No admin rights: keys in iKVM Java windows aren't fixed."
-            . " To try again, click the first entry in the tray menu.", "iKVM-SwissBugPasta", 0x2
+        TrayTip "No admin rights: iKVM Java windows (running as admin) are out of reach."
+            . " To try again, click the first entry in the tray menu.", "iKVM-KeyPasta", 0x2
 }
 
 RetryPrivileged(*) {
@@ -192,7 +218,9 @@ RetryPrivileged(*) {
     RestartPrivileged()
 }
 
-CloseOtherInstances()
+OthersClosed := CloseOtherInstances()
+if (ExitOnly)
+    ExitApp OthersClosed ? 0 : 1
 
 
 ; Windows-1252 characters 128-159 (Unicode code point -> ANSI code), see AltCodeDigits
@@ -205,6 +233,7 @@ Cp1252Extra := Map(
 
 ; iKVM Java windows told to use the US key table (see TellJava): window -> true
 ToldJava := Map()
+RightsChecked := Map()      ; iKVM Java windows with the agent checked for reachability, see HandleActiveWindow
 JavaWatch := 0              ; active iKVM Java window and its layout, see WatchJavaLayout
 
 ; SendEvent with a fixed key delay for the Java app (see SendKeys)
@@ -251,9 +280,16 @@ ActiveTitle() {
         return ""
 }
 
-; iKVM Java app, e.g. "Java iKVM Viewer  [10.190.24.29_SSL]  " (note the double space)
+; iKVM Java app, e.g. "Java iKVM Viewer  [192.0.2.29_SSL]  " (IPMIView, note the double space)
+; or "Java iKVM Viewer v1.69.44 [198.51.100.120]" (.jnlp from the BMC's web interface)
 IsJavaKvm() {
-    return RegExMatch(ActiveTitle(), "^Java iKVM Viewer +\[")
+    return RegExMatch(ActiveTitle(), "^Java iKVM Viewer( v\S+)? +\[")
+}
+
+; ... without the Java agent (iKVM-KeyPasta-agent.jar). With it, the title ends with " ⌨":
+; the agent fixes the keys and pastes inside Java, here only Alt+Tab and Ctrl+Alt+End remain
+IsJavaPlain() {
+    return IsJavaKvm() and !InStr(ActiveTitle(), " ⌨")
 }
 
 ; iKVM/HTML5 browser viewer, e.g. "Resolution:1024x768 FPS :20 — Mozilla Firefox"
@@ -262,7 +298,7 @@ IsHtmlKvm() {
     return RegExMatch(ActiveTitle(), "^Resolution:\d+.*FPS :\d+")
 }
 
-; iKVM/HTML5 viewer with the userscript iKVM-HTML5-positional.user.js active (it appends " ⌨" to
+; iKVM/HTML5 viewer with the userscript iKVM-KeyPasta.user.js active (it appends " ⌨" to
 ; the page title): it sends every key by its position itself, nothing to remap here
 IsHtmlPositional() {
     return IsHtmlKvm() and InStr(ActiveTitle(), " ⌨")
@@ -355,7 +391,7 @@ IsConfiguredLayout(Klid) {
         Loop Reg, "HKCU\Keyboard Layout\Preload" {
             Entry := RegRead()
             try Entry := RegRead("HKCU\Keyboard Layout\Substitutes", Entry)
-            if (StrLower(Entry) == StrLower(Klid))  ; "=" is case sensitive here (A_StringCaseSense)
+            if (StrLower(Entry) == StrLower(Klid))  ; (case-insensitive: Klids may differ in case)
                 return true
         }
     }
@@ -399,7 +435,7 @@ TellJava(Hwnd, Us := true) {
     }
     if (Us)
         ToldJava[Hwnd] := true
-    else
+    else if (ToldJava.Has(Hwnd))
         ToldJava.Delete(Hwnd)
     Log("  told " (Us ? "US " : "real layout ") HexLayout(Hkl))
 }
@@ -432,6 +468,18 @@ HandleActiveWindow(Hwnd) {
     global JavaWatch
     if (A_IsSuspended or !Hwnd or Hwnd != WinExist("A") or !IsJavaKvm())
         return
+    if (!IsJavaPlain()) {           ; Java agent: its real table back, if told earlier
+        SetTimer(WatchJavaLayout, 0)
+        if (ToldJava.Has(Hwnd)) {
+            TellJava(Hwnd, false)
+        } else if (!RightsChecked.Has(Hwnd)) {
+            ; Alt+Tab and Ctrl+Alt+End still need messages to reach it (the viewer runs as admin):
+            ; find out with a harmless one, its real layout, which it has anyway
+            RightsChecked[Hwnd] := true
+            TellJava(Hwnd, false)
+        }
+        return
+    }
     Log("iKVM Java " WindowInfo(Hwnd))
     TellJava(Hwnd)
     JavaWatch := {Hwnd: Hwnd, Layout: WindowLayout(Hwnd)}
@@ -474,7 +522,7 @@ LogText() {
 ShowLog(*) {
     global LogGui
     if (!LogGui) {
-        LogGui := Gui("+Resize", "iKVM-SwissBugPasta: iKVM Java log")
+        LogGui := Gui("+Resize", "iKVM-KeyPasta: iKVM Java log")
         LogGui.SetFont(, "Consolas")
         LogGui.Add("Edit", "vLog ReadOnly -Wrap HScroll w900 h500")
         LogGui.OnEvent("Size", (G, MinMax, W, H) => G["Log"].Move(, , W - 20, H - 20))
@@ -577,24 +625,23 @@ UsCharAtPosition := Map(
 ; Keys typing a character on the remote: the character's key on the remote's layout (see
 ; RemoteLayout and CharKeyTable), sent as
 ;   iKVM Java: the US key code of that position
-;   iKVM/HTML5 with the userscript: the key's scan code (the userscript sends its position)
-;   iKVM/HTML5 without: the US character of that position (see HtmlFallbackKey), no AltGr
-; "" if it can't be typed that way (alt code instead): not on the keyboard, dead keys.
+;   iKVM/HTML5 (without the userscript): the US character of that position (see
+;   HtmlFallbackKey), no AltGr
+; "" if it can't be typed that way (alt code instead): not on the keyboard, dead keys, and ¦
+; (AltGr+1 on Windows' Swiss layouts, but | on Linux).
 PositionalKeysForChar(Char, Hkl) {
     if (Char = "`n")
         return "{Enter}"
-    if (InStr("´``^~¨", Char))
+    if (InStr("´``^~¨¦", Char))
         return ""
     Table := CharKeyTable(Hkl)
     if (!Table.Has(Char))
         return ""
     Key := Table[Char]
-    if (IsJavaKvm()) {
+    if (IsJavaPlain()) {
         Vk := UsKeyAtPosition.Has(Key.Sc) ? UsKeyAtPosition[Key.Sc]
             : DllCall("MapVirtualKeyExW", "UInt", Key.Sc, "UInt", 1, "Ptr", Hkl, "UInt")   ; Tab, Space
         Keys := "{vk" Format("{:02X}", Vk) "}"
-    } else if (IsHtmlPositional()) {
-        Keys := "{sc" Format("{:03X}", Key.Sc) "}"
     } else {
         if ((Key.Mods & 2) or Key.Sc = 0x56)
             return ""
@@ -731,7 +778,6 @@ SendClipboard(AltCodesOnly := false, SendNonAscii := "") {
     OriginalWinID := WinExist("A")
     Hkl := AltCodesOnly ? 0 : RemoteLayout(OriginalWinID)
 
-    NativeChars := 0
     ControlChars := 0
     CodepageChars := 0
     UnicodeChars := 0
@@ -743,8 +789,8 @@ SendClipboard(AltCodesOnly := false, SendNonAscii := "") {
         Keys.Push(!AltCodesOnly ? PositionalKeysForChar(Char, Hkl)
             : Map("`n", "{Enter}", "`t", "{Tab}", " ", "{Space}").Get(Char, ""))
         if (Keys[-1] != "")
-            NativeChars++
-        else if (CharCode < 32 or CharCode = 127)
+            continue
+        if (CharCode < 32 or CharCode = 127)
             ControlChars++
         else if ((CharCode >= 128 and CharCode <= 255) or (RemoteWindows and Cp1252Extra.Has(CharCode)))
             CodepageChars++
@@ -848,16 +894,16 @@ SendClipboard(AltCodesOnly := false, SendNonAscii := "") {
         DllCall("winmm\timeEndPeriod", "UInt", 1)
 }
 
-JavaPasting := false
-
 ; Paste hotkey (PasteHotkey, Alt+Shift+V by default). With CapsLock on: safe paste, everything
-; as alt codes (slower, any remote layout). In iKVM windows the key handlers take every key by
-; position before this hotkey sees it, so they check for it themselves (see IsPasteKey).
+; as alt codes (slower, any remote layout). Not where the Java agent or the userscript is active
+; (title ends with " ⌨"): they paste themselves. In iKVM windows the key handlers take every
+; key by position before this hotkey sees it, so they check for it themselves (see IsPasteKey).
 PasteIntoKvm(*) {
-    global JavaPasting
+    global JavaPasting, JavaPasteSc
     BreakModifiers()
     WaitForHotkeyRelease()
-    JavaPasting := IsJavaKvm()
+    JavaPasteSc := 0        ; released by now (also if that happened outside the iKVM window)
+    JavaPasting := IsJavaPlain()
     try SendClipboard(GetKeyState("CapsLock", "T"))
     finally JavaPasting := false
 }
@@ -869,7 +915,7 @@ PasteIntoOtherApp(*) {
     SendInput "{Raw}" NormalizeLineBreaks(A_Clipboard)
 }
 
-HotIf((*) => IsJavaKvm() or IsHtmlKvm())
+HotIf((*) => IsJavaPlain() or (IsHtmlKvm() and !IsHtmlPositional()))
 Hotkey(PasteHotkey, PasteIntoKvm)
 HotIf((*) => PasteInOtherApps and not IsJavaKvm() and not IsHtmlKvm())
 Hotkey(PasteHotkey, PasteIntoOtherApp)
@@ -878,19 +924,17 @@ HotIf()
 ; A paste key in the main block also has the scan code hotkeys of the iKVM key handlers (Java,
 ; HTML5 without the userscript), and AutoHotkey always takes a key's scan code hotkey over its
 ; letter hotkey, even where that one's #HotIf is false: the letter hotkey above then never fires.
-; So it's caught by scan code here too, for the windows those handlers leave alone (other
-; programs, HTML5 with the userscript); the handlers check for it themselves (see IsPasteKey).
+; So it's caught by scan code here too, for other programs; the handlers check for it themselves
+; (see IsPasteKey). iKVM windows with the Java agent or the userscript paste themselves: left alone.
 PasteKeyHere(HotkeyName) {
-    if (IsJavaKvm() or (IsHtmlKvm() and !IsHtmlPositional()))
-        return false
-    if (!IsHtmlKvm() and !PasteInOtherApps)
+    if (IsJavaKvm() or IsHtmlKvm() or !PasteInOtherApps)
         return false
     return IsPasteKey(Integer("0x" SubStr(HotkeyName, -3)))
 }
 
 HotIf(PasteKeyHere)
 for PasteSc in UsKeyAtPosition
-    Hotkey("*SC" Format("{:03X}", PasteSc), (*) => IsHtmlKvm() ? PasteIntoKvm() : PasteIntoOtherApp())
+    Hotkey("*SC" Format("{:03X}", PasteSc), PasteIntoOtherApp)
 HotIf()
 
 ; Ctrl+Alt+End (left Alt): Ctrl+Alt+Del on the remote, as in Remote Desktop, after asking (a
@@ -904,14 +948,14 @@ HotIf()
     global CtrlAltDelQuietUntil
     SendPendingCtrl()
     WinID := WinExist("A")
-    Java := IsJavaKvm()
+    Java := IsJavaPlain()
     ; everything released first (the remote gets Ctrl and Alt back up), then ask
     KeyWait "End"
     KeyWait "Ctrl"
     KeyWait "Alt"
     if (ConfirmCtrlAltDel and !(CtrlAltDelQuietUntil != "" and A_Now < CtrlAltDelQuietUntil)) {
         Quiet := false
-        if (AskUser("iKVM-SwissBugPasta", "Send Ctrl+Alt+Del to the remote?`n`n"
+        if (AskUser("iKVM-KeyPasta", "Send Ctrl+Alt+Del to the remote?`n`n"
                 . "On a Linux console, this reboots the server right away.", ["Send Ctrl+Alt+Del", "Cancel"], 2
                 , , "Don't ask again for 4 hours", &Quiet) != "Send Ctrl+Alt+Del") {
             try WinActivate("ahk_id " WinID)
@@ -972,10 +1016,7 @@ IsPasteKey(Sc) {
 ;   or Windows remotes).
 ;   iKVM/HTML5 without the userscript: AltGr isn't passed on at all (see HtmlFallbackKey)
 ; Off while pasting into iKVM Java: the paste sends AltGr itself and releases that Ctrl.
-CtrlSent := false
-CtrlPending := false        ; left Ctrl is being held back right now
-
-#HotIf (IsJavaKvm() and !JavaPasting) or (IsHtmlKvm() and !IsHtmlPositional())
+#HotIf (IsJavaPlain() and !JavaPasting) or (IsHtmlKvm() and !IsHtmlPositional())
 *LCtrl:: {
     global CtrlPending
     ; real Ctrl held down, key repeat (unless it was released in another window meanwhile)
@@ -997,11 +1038,11 @@ SendPendingCtrl() {
     if (GetKeyState("RAlt") or GetKeyState("RAlt", "P"))
         return
     CtrlSent := true
-    SendEvent "{Blind}{LCtrl DownR}" (IsJavaKvm() ? "{vk87 up}" : "")
+    SendEvent "{Blind}{LCtrl DownR}" (IsJavaPlain() ? "{vk87 up}" : "")
 }
 
 ; also in any other window when released there (switched windows while holding it): no stuck Ctrl
-#HotIf CtrlSent or (IsJavaKvm() and !JavaPasting) or (IsHtmlKvm() and !IsHtmlPositional())
+#HotIf CtrlSent or (IsJavaPlain() and !JavaPasting) or (IsHtmlKvm() and !IsHtmlPositional())
 *LCtrl up:: {
     global CtrlSent, CtrlPending
     ; tapped quicker than the hold back: never sent, so nothing to release
@@ -1022,8 +1063,7 @@ SendPendingCtrl() {
 ; UsKeyAtPosition), whatever the local layout, so the remote's layout decides what it types,
 ; like with a keyboard attached to it: dead keys, shortcuts and all modifiers included.
 ; Like a remap (a::b), but for all keys from the table, and checking for the paste hotkey.
-JavaPasteSc := 0            ; the paste hotkey's key while it's held: its release isn't passed on
-
+; The paste hotkey's key (JavaPasteSc) isn't passed on while it's held, its release neither.
 JavaKey(Sc, Vk, Down, *) {
     global JavaPasteSc
     if (Down)
@@ -1040,14 +1080,14 @@ JavaKey(Sc, Vk, Down, *) {
     SendEvent "{Blind}{vk" Format("{:02X}", Vk) (Down ? " DownR}" : " up}")
 }
 
-HotIf((*) => IsJavaKvm())
+HotIf((*) => IsJavaPlain())
 for JavaKeySc, JavaKeyVk in UsKeyAtPosition {
     Hotkey("*SC" Format("{:03X}", JavaKeySc), JavaKey.Bind(JavaKeySc, JavaKeyVk, true))
     Hotkey("*SC" Format("{:03X}", JavaKeySc) " up", JavaKey.Bind(JavaKeySc, JavaKeyVk, false))
 }
 HotIf()
 
-#HotIf IsJavaKvm()
+#HotIf IsJavaPlain()
 
 ; Lock keys only reach the remote as one quick tap: in iKVM's "stable" keyboard mode (option
 ; "Repeat Key timeout"), a key released within the timeout is sent as one press+release message,
@@ -1058,6 +1098,8 @@ HotIf()
     SendEvent "{Blind}{CapsLock}"
     KeyWait "CapsLock"
 }
+
+#HotIf IsJavaKvm()
 
 ; Alt+Tab (and Alt+Shift+Tab) to the remote instead of the local task switcher. Windows starts
 ; its switcher for every Alt+Tab, even a sent one, so the Tab is posted to the Java window's
@@ -1121,7 +1163,7 @@ for HtmlKeySc in UsCharAtPosition
 Hotkey("*SC056", HtmlFallbackKey.Bind(0x56))
 ; AltGr isn't passed on: the viewer would send left Ctrl and left Alt for it
 Hotkey("*RAlt", (*) => 0)
-Hotkey("*RAlt up", (*) => 0)
+Hotkey("*RAlt up", (*) => GetKeyState("RAlt") ? SendEvent("{Blind}{RAlt up}") : 0)    ; pressed elsewhere
 HotIf()
 
 
@@ -1132,7 +1174,8 @@ HotIf()
 ;   Non-ASCII characters: Ask         > (•) Ask on every paste
 ;                                       ( ) Always include
 ;                                       ( ) Always omit
-;   [x] Alt+Shift+V pastes in other windows than iKVM remotes (PasteHotkey)
+;   Alt+Shift+V pastes in: Any window > (•) Any window              (PasteHotkey)
+;                                       ( ) iKVM windows only
 ;   ---
 ;   Suspend hotkeys
 ;   Exit
@@ -1151,7 +1194,11 @@ BuildTrayMenu() {
     NonAsciiMenu.Add("Always omit", (*) => SetPasteNonAscii(false), "Radio")
     NonAsciiMenu.Check(NonAsciiLabel)
 
-    OtherAppsLabel := PasteHotkeyText " pastes in other windows than iKVM remotes"
+    PasteWhereLabel := PasteInOtherApps ? "Any window" : "iKVM windows only"
+    PasteWhereMenu := Menu()
+    PasteWhereMenu.Add("Any window", (*) => SetPasteInOtherApps(true), "Radio")
+    PasteWhereMenu.Add("iKVM windows only", (*) => SetPasteInOtherApps(false), "Radio")
+    PasteWhereMenu.Check(PasteWhereLabel)
 
     Tray := A_TrayMenu
     Tray.Delete()
@@ -1161,9 +1208,7 @@ BuildTrayMenu() {
     }
     Tray.Add("Remote OS: " RemoteLabel, RemoteMenu)
     Tray.Add("Non-ASCII characters: " NonAsciiLabel, NonAsciiMenu)
-    Tray.Add(OtherAppsLabel, (*) => SetPasteInOtherApps(!PasteInOtherApps))
-    if (PasteInOtherApps)
-        Tray.Check(OtherAppsLabel)
+    Tray.Add(PasteHotkeyText " pastes in: " PasteWhereLabel, PasteWhereMenu)
     Tray.Add()
     Tray.Add(A_IsSuspended ? "Resume hotkeys" : "Suspend hotkeys", PauseResume)
     Tray.Add("Exit", (*) => ExitApp())
@@ -1217,10 +1262,12 @@ SetTrayIcon(Suspended) {
     if (Icon = TrayIconShown)
         return
     TrayIconShown := Icon
-    if A_IsCompiled
-        TraySetIcon(A_ScriptFullPath, -Map("dark", 159, "light", 300, "light-suspended", 301, "dark-suspended", 302)[Icon], true)
-    else
-        TraySetIcon("PPCH_outlined_" Icon ".ico", , true)
+    ; (icon file missing: the default icon, no error box; braces: a try would take the else)
+    if A_IsCompiled {
+        try TraySetIcon(A_ScriptFullPath, -Map("dark", 159, "light", 300, "light-suspended", 301, "dark-suspended", 302)[Icon], true)
+    } else {
+        try TraySetIcon("PPCH_outlined_" Icon ".ico", , true)
+    }
 }
 
 ; Taskbar (system) in light mode? Missing before Windows 10 1903, which only had a dark taskbar.
