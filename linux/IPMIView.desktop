@@ -1,0 +1,14 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=IPMIView
+GenericName=Server Management (IPMI)
+Comment=Supermicro IPMIView with iKVM-KeyPasta agent
+Icon=ipmiview-keypasta
+TryExec=@DEST@/ipmiview-keypasta.sh
+Exec="@DEST@/ipmiview-keypasta.sh" @IPMIVIEW@
+Terminal=false
+StartupNotify=true
+StartupWMClass=IPMIView
+Categories=Network;RemoteAccess;
+Keywords=IPMI;BMC;KVM;iKVM;Supermicro;remote console;server;

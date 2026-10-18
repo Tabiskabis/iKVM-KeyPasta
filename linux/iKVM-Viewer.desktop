@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Version=1.5
+Name=iKVM Viewer
+GenericName=Remote Console
+Comment=Supermicro iKVM console (.jnlp files) with iKVM-KeyPasta agent
+Icon=ikvm-keypasta
+TryExec=@DEST@/jnlp-keypasta.sh
+Exec="@DEST@/jnlp-keypasta.sh" %f
+Terminal=false
+StartupNotify=true
+StartupWMClass=iKVM-Viewer
+MimeType=application/x-java-jnlp-file;
+Categories=Network;RemoteAccess;
+Keywords=IPMI;BMC;KVM;iKVM;Supermicro;jnlp;Java Web Start;remote console;

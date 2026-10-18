@@ -1,0 +1,15 @@
+#!/usr/bin/python3
+# websockify, its web pages (noVNC) sent with "Cache-Control: no-cache": a browser asks again each
+# time (304 if unchanged). Without it, browsers kept old noVNC files for weeks (they guess a time
+# from the file dates): after the image's noVNC changed, an old ui.js with the new vnc.html broke
+# the page ("Cannot read properties of null"). Same arguments as websockify.
+import sys
+from http.server import SimpleHTTPRequestHandler
+_end_headers = SimpleHTTPRequestHandler.end_headers
+def end_headers(self):
+    self.send_header('Cache-Control', 'no-cache')
+    _end_headers(self)
+SimpleHTTPRequestHandler.end_headers = end_headers
+from websockify.websocketproxy import websockify_init
+sys.argv[0] = 'websockify'
+sys.exit(websockify_init())

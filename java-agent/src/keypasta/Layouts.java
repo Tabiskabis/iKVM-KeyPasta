@@ -63,9 +63,21 @@ final class Layouts {
         return vk == null ? -1 : vk;
     }
 
+    /** The remote layouts fast paste knows: code (option value), name. */
+    static final String[] CODES = {"us", "de-CH", "fr-CH", "de-DE"};
+    static final String[] NAMES = {"United States", "Swiss German", "Swiss French", "German"};
+
+    static String name(String code) {
+        for (int i = 0; i < CODES.length; i++)
+            if (CODES[i].equals(code))
+                return NAMES[i];
+        return code;
+    }
+
     /**
-     * Swiss layouts: position, then the characters with no modifier, Shift and AltGr. Dead keys
-     * and empty places are 0 (dead-key characters are pasted as alt codes).
+     * Layouts: position, then the characters with no modifier, Shift and AltGr. Dead keys and
+     * empty places are 0 (dead-key characters are pasted as alt codes). Letters come from the
+     * rows below.
      */
     private static final Object[][] SWISS_GERMAN = {
         {0x02, '1', '+', '¦'}, {0x03, '2', '"', '@'}, {0x04, '3', '*', '#'},
@@ -81,21 +93,52 @@ final class Layouts {
         {TAB, '\t', 0, 0}, {SPACE, ' ', 0, 0},
     };
 
-    /** Letters of the Swiss layouts (QWERTZ): position, letter (Shift: capital). */
-    private static final String LETTERS_ROW1 = "qwertzuiop";
-    private static final String LETTERS_ROW2 = "asdfghjkl";
-    private static final String LETTERS_ROW3 = "yxcvbnm";
+    /** German (Germany), Windows and the Linux console (X11 has a dead ~ on AltGr++). */
+    private static final Object[][] GERMAN = {
+        {0x29, 0, '°', 0},
+        {0x02, '1', '!', 0}, {0x03, '2', '"', '²'}, {0x04, '3', '§', '³'},
+        {0x05, '4', '$', 0}, {0x06, '5', '%', 0}, {0x07, '6', '&', 0},
+        {0x08, '7', '/', '{'}, {0x09, '8', '(', '['}, {0x0A, '9', ')', ']'},
+        {0x0B, '0', '=', '}'}, {0x0C, 'ß', '?', '\\'}, {0x0D, 0, 0, 0},
+        {0x10, 'q', 'Q', '@'}, {0x12, 'e', 'E', '€'},
+        {0x1A, 'ü', 'Ü', 0}, {0x1B, '+', '*', '~'},
+        {0x27, 'ö', 'Ö', 0}, {0x28, 'ä', 'Ä', 0}, {0x2B, '#', '\'', 0},
+        {0x32, 'm', 'M', 'µ'},
+        {0x33, ',', ';', 0}, {0x34, '.', ':', 0}, {0x35, '-', '_', 0},
+        {0x56, '<', '>', '|'},
+        {TAB, '\t', 0, 0}, {SPACE, ' ', 0, 0},
+    };
 
-    /** Character -> {position, modifiers}, fewest modifiers first. */
-    static Map<Character, int[]> swiss(boolean french) {
+    /** US. The ISO key (only on ISO keyboards) is left out: \ and | are on 0x2B on every US keyboard. */
+    private static final Object[][] US = {
+        {0x29, '`', '~', 0},
+        {0x02, '1', '!', 0}, {0x03, '2', '@', 0}, {0x04, '3', '#', 0},
+        {0x05, '4', '$', 0}, {0x06, '5', '%', 0}, {0x07, '6', '^', 0},
+        {0x08, '7', '&', 0}, {0x09, '8', '*', 0}, {0x0A, '9', '(', 0},
+        {0x0B, '0', ')', 0}, {0x0C, '-', '_', 0}, {0x0D, '=', '+', 0},
+        {0x1A, '[', '{', 0}, {0x1B, ']', '}', 0},
+        {0x27, ';', ':', 0}, {0x28, '\'', '"', 0}, {0x2B, '\\', '|', 0},
+        {0x33, ',', '<', 0}, {0x34, '.', '>', 0}, {0x35, '/', '?', 0},
+        {TAB, '\t', 0, 0}, {SPACE, ' ', 0, 0},
+    };
+
+    /** Letter rows (Shift: capital), QWERTZ and QWERTY. */
+    private static final String[] QWERTZ = {"qwertzuiop", "asdfghjkl", "yxcvbnm"};
+    private static final String[] QWERTY = {"qwertyuiop", "asdfghjkl", "zxcvbnm"};
+
+    /** Character -> {position, modifiers}, fewest modifiers first, for a layout of CODES. */
+    static Map<Character, int[]> table(String layout) {
+        boolean french = layout.equals("fr-CH");
+        Object[][] rows = layout.equals("us") ? US : layout.equals("de-DE") ? GERMAN : SWISS_GERMAN;
+        String[] letters = layout.equals("us") ? QWERTY : QWERTZ;
         Map<Character, int[]> table = new HashMap<Character, int[]>();
         for (int mods = 0; mods <= ALTGR; mods++) {
             if (mods == 0 || mods == SHIFT) {
-                addLetters(table, 0x10, LETTERS_ROW1, mods);
-                addLetters(table, 0x1E, LETTERS_ROW2, mods);
-                addLetters(table, 0x2C, LETTERS_ROW3, mods);
+                addLetters(table, 0x10, letters[0], mods);
+                addLetters(table, 0x1E, letters[1], mods);
+                addLetters(table, 0x2C, letters[2], mods);
             }
-            for (Object[] row : SWISS_GERMAN) {
+            for (Object[] row : rows) {
                 int position = (Integer) row[0];
                 Object value = row[1 + mods];
                 // Swiss French: the umlauts and the accented letters swap places
@@ -124,23 +167,59 @@ final class Layouts {
     /**
      * macOS doesn't pass key positions to Java: key code -> position, for a known local layout.
      * Only for the key codes macOS's Java takes from the character (letters, digits, dead keys,
-     * see KeyFix.position); all other keys get the US key code of their position already.
+     * see KeyFix.position); all other keys get the US key code of their position already. US:
+     * none needed.
      */
     static Map<Integer, Integer> macPositions(String layout) {
         Map<Integer, Integer> map = new HashMap<Integer, Integer>();
-        if (layout.equals("de-CH") || layout.equals("fr-CH")) {
-            for (Map.Entry<Character, int[]> e : swiss(layout.equals("fr-CH")).entrySet()) {
-                if (e.getValue()[1] != 0)
-                    continue;
-                int vk = KeyEvent.getExtendedKeyCodeForChar(e.getKey());
-                if (vk != KeyEvent.VK_UNDEFINED && !map.containsKey(vk))
-                    map.put(vk, e.getValue()[0]);
-            }
+        if (layout.equals("us"))
+            return map;
+        for (Map.Entry<Character, int[]> e : table(layout).entrySet()) {
+            if (e.getValue()[1] != 0)
+                continue;
+            int vk = KeyEvent.getExtendedKeyCodeForChar(e.getKey());
+            if (vk != KeyEvent.VK_UNDEFINED && !map.containsKey(vk))
+                map.put(vk, e.getValue()[0]);
+        }
+        if (layout.equals("de-DE")) {
+            map.put(KeyEvent.VK_DEAD_CIRCUMFLEX, 0x29);
+            map.put(KeyEvent.VK_DEAD_ACUTE, 0x0D);
+            map.put(KeyEvent.VK_DEAD_GRAVE, 0x0D);      // Shift + the ´ key
+        } else {
             map.put(KeyEvent.VK_DEAD_CIRCUMFLEX, 0x0D);
             map.put(KeyEvent.VK_DEAD_GRAVE, 0x0D);      // Shift + the ^ key
             map.put(KeyEvent.VK_DEAD_DIAERESIS, 0x1B);
         }
         return map;
+    }
+
+    /**
+     * macOS: the local layouts (of CODES) a key fits, by its unmodified character, for keys whose
+     * key code is their position; null: the key tells nothing.
+     */
+    static java.util.List<String> macLayoutsFor(int keyCode, char c) {
+        String fits;
+        switch (keyCode) {
+            case KeyEvent.VK_MINUS: fits = c == '\'' ? "de-CH fr-CH" : c == 'ß' ? "de-DE" : c == '-' ? "us" : null; break;
+            case KeyEvent.VK_SEMICOLON: fits = c == 'ö' ? "de-CH de-DE" : c == 'é' ? "fr-CH" : c == ';' ? "us" : null; break;
+            case KeyEvent.VK_OPEN_BRACKET: fits = c == 'ü' ? "de-CH de-DE" : c == 'è' ? "fr-CH" : c == '[' ? "us" : null; break;
+            case KeyEvent.VK_QUOTE: fits = c == 'ä' ? "de-CH de-DE" : c == 'à' ? "fr-CH" : c == '\'' ? "us" : null; break;
+            case KeyEvent.VK_BACK_SLASH: fits = c == '$' ? "de-CH fr-CH" : c == '#' ? "de-DE" : c == '\\' ? "us" : null; break;
+            case KeyEvent.VK_CLOSE_BRACKET: fits = c == '+' ? "de-DE" : c == ']' ? "us" : null; break;
+            case KeyEvent.VK_SLASH: fits = c == '-' ? "de-CH fr-CH de-DE" : c == '/' ? "us" : null; break;
+            default: fits = null;
+        }
+        return fits == null ? null : java.util.Arrays.asList(fits.split(" "));
+    }
+
+    /**
+     * macOS gives the key left of 1 and the ISO key (left of Y/Z) the same key code,
+     * VK_BACK_QUOTE: their characters tell them apart. The left-of-1 key's are known (§ °, US ` ~, and
+     * their Option characters as far as known); anything else (< > ≤ ≥, AltGr/Option characters
+     * that differ by layout) counts as the ISO key, which a US ANSI keyboard doesn't have anyway.
+     */
+    static int macBackQuotePosition(char c) {
+        return "§°±¶•`~^¬".indexOf(c) >= 0 ? 0x29 : 0x56;
     }
 
     /** Windows-1252 characters 128-159: Unicode code point -> ANSI code. */

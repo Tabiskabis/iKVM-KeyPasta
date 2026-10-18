@@ -12,7 +12,8 @@
 ::      Without the exe and AutoHotkey 2.0.0 or newer: asks whether to install AutoHotkey with
 ::      winget (for all users: UI Access works only from %ProgramFiles%).
 ::   3. If OpenWebStart (for .jnlp files) is missing: asks whether to install it with winget.
-:: No environment variables. Run it again to update. uninstall.cmd undoes all of it.
+:: The Windows files are next to this file, the jar one folder up (the project's top folder) or
+:: next to it too. No environment variables. Run it again to update. uninstall.cmd undoes all of it.
 
 setlocal
 
@@ -65,23 +66,31 @@ echo Installing to "%DEST%":
 if not exist "%DEST%" mkdir "%DEST%"
 set "FAILED="
 for %%F in (%FILES%) do (
-    if exist "%SRC%%%F" (
-        copy /y "%SRC%%%F" "%DEST%\%%F" >nul 2>&1
-        rem compared: a file in use, like the running exe, can't be overwritten
-        fc /b "%SRC%%%F" "%DEST%\%%F" >nul 2>&1
-        if errorlevel 1 (
-            >&2 echo   %%F: FAILED, still running?
-            set "FAILED=1"
-        ) else (
-            echo   %%F
-        )
-    )
+    rem next to this file, else one folder up (the jar)
+    set "FROM="
+    if exist "%SRC%..\%%F" set "FROM=%SRC%..\%%F"
+    if exist "%SRC%%%F" set "FROM=%SRC%%%F"
+    call :copyone "%%F"
 )
 :: permissions only as inherited from %ProgramFiles% (users read and run, admins write), and no
 :: "downloaded from the internet" mark, which would make Windows ask before running the scripts
 icacls "%DEST%" /reset /t /c /q >nul
 powershell -NoProfile -Command "Get-ChildItem -LiteralPath $env:DEST | Unblock-File" >nul 2>&1
 if defined FAILED exit /b 1
+exit /b 0
+
+:: one file (%1, its name) from FROM, if there is one
+:copyone
+if not defined FROM exit /b 0
+copy /y "%FROM%" "%DEST%\%~1" >nul 2>&1
+rem compared: a file in use, like the running exe, can't be overwritten
+fc /b "%FROM%" "%DEST%\%~1" >nul 2>&1
+if errorlevel 1 (
+    >&2 echo   %~1: FAILED, still running?
+    set "FAILED=1"
+) else (
+    echo   %~1
+)
 exit /b 0
 
 :: ---- as the user: .jnlp files, autostart ----
@@ -152,7 +161,7 @@ if errorlevel 1 >&2 echo OpenWebStart couldn't be installed. Get it from https:/
 
 :end
 echo.
-echo Done. See REAMDE.md for installation of the .user.js in your browser for the best HTML5 iKVM experience.
+echo Done. See README.md for installation of the .user.js in your browser for the best HTML5 iKVM experience.
 echo.
 echo Press any key to close this message . . .
 pause >NUL

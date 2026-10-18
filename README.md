@@ -1,25 +1,28 @@
 # The iKVM-KeyPasta Project
 
-Makes the keyboard work properly in the Supermicro/ATEN iKVM remote console (Java app and HTML5 browser viewer). Regardless of local or remote keyboard layout, keypresses arrive as typed on your physical keyboard, even dead keys and AltGr. Adds pasting from local clipboard with `Alt+Shift+V` (macOS: `⇧⌘C`).  
+Makes the keyboard work properly in the Supermicro/ATEN iKVM remote console (Java app and HTML5 browser viewer). Regardless of local or remote keyboard layout, keypresses arrive as typed on your physical keyboard, even dead keys and AltGr. Adds pasting from the local clipboard with `Alt+Shift+V` (macOS: `⌥⇧V` or `⇧⌘V` in the Java viewer, `⇧⌘V` in the browser).
 
 Mix and match any of the three parts:
 
 - **`iKVM-KeyPasta.ahk`** (AutoHotkey v2, Windows only): simple and well tested script for both viewers, but less well integrated. Keystrokes may come out imperfect. AHK needs admin rights to install. The script runs with UI Access through the AutoHotkey installation instead of as admin. Also adds Ctrl+Alt+Del to the remote, Alt+Tab in the Java app, and the paste shortcut works in other programs than iKVM, too.
 
-- **`iKVM-KeyPasta.user.js`** (userscript for HTML5 viewer): fixes the problems at their source, inside the viewer. Any browser with Tampermonkey or Violentmonkey, any system. No admin rights needed.
+- **`iKVM-KeyPasta.user.js`** (userscript for the HTML5 viewer): fixes the problems at their source, inside the viewer. Any browser with Tampermonkey or Violentmonkey, any system. No admin rights needed.
 
-- **`iKVM-KeyPasta-agent.jar`** (Java agent with support for IPMIView and .jnlp files): fixes the problems at their source, inside the viewer. Windows, Linux and macOS. Needs admin rights to install.
+- **`iKVM-KeyPasta-agent.jar`** (Java agent for IPMIView and .jnlp files): fixes the problems at their source, inside the viewer. Windows, Linux and macOS. Needs admin rights to install. It also fixes a list of annoyances in IPMIView itself: faster console launch and first login, no password file in the temp folder, saved passwords shown and used for firmware updates, readable fonts on Linux and macOS, and more (see [DOCUMENTATION.md](DOCUMENTATION.md#7-the-java-agent-fixes-in-ipmiview)).
 
-Where the agent or the userscript is active, the AutoHotkey script leaves that viewer to it and only adds Ctrl+Alt+Del (and Alt+Tab in the Java app).
+Extra: **`login-fix.user.js`** (userscript for the BMC's login page, any browser and system): makes the login form fillable by password managers again (autocomplete attributes, a real password field, focus on the user name). It matches BMCs addressed by IP address (IPv4, IPv6, `*.ipv6-literal.net`); for host names, add them in the extension's script settings. Installed like the other userscript.
+
+Where the agent or the userscript is active, the AHK script leaves that viewer alone and only adds Ctrl+Alt+Del via Ctrl+Alt+End (mimicking RDP) and Alt+Tab (Java app).
 
 
 ## Quick install
 
-On Windows, run `install.cmd` (requires Admin elevation). It copies the available files to `%ProgramFiles%\iKVM-KeyPasta\`, registers the jnlp-launcher, puts the AHK in autostart and starts it. It also creates a new shortcut in the start menu that starts IPMIView with the java agent as administrator. 
-It asks to install AutoHotkey v2 and OpenWebStart, but does not import the userscript to your browser. Associating .jnlp files to open with the jnlp-launcher also is a manual task.
+**Windows:** run `windows\install.cmd` (requires admin elevation). It copies the available files to `%ProgramFiles%\iKVM-KeyPasta\`, registers the jnlp launcher, puts the AHK in autostart and starts it. It also creates a new shortcut in the Start menu that starts IPMIView with the Java agent as administrator.
+It asks to install AutoHotkey v2 and OpenWebStart, but does not import the userscript to your browser. Associating .jnlp files with the jnlp launcher also is a manual task (see below).
 
-Linux and Mac users are on their own for now. I expect Linux users to be savvy enough to hack a launcher for IPMIView or jnlp files themselves.  
-I did not test any of this on macOS. But it's probably not hard to create an Automator/AppleScript to open jnlp files with or start IPMIView with the correct environment.
+**Linux:** run `bash linux/install.sh`, optionally with IPMIView's folder (`bash linux/install.sh ~/IPMIView_2.25.0_build.260709_bundleJRE_Linux_x64`). It puts IPMIView and iKVM Viewer, both with the agent, into your desktop's app menu: just for you if IPMIView is in your home folder, else for all users (asks for sudo; `--user` or `--system` to choose). iKVM Viewer opens .jnlp files with OpenWebStart (install that first, see below); without a file it opens the launch.jnlp in your Downloads folder. With IPMIView installed for all users, everyone's BMC list and logins are kept in their own `~/.config/ipmiview`. From a terminal, `ipmiview` starts IPMIView; `--debug` shows the agent's log there (`ipmiview --debug`, `/opt/iKVM-KeyPasta/jnlp-keypasta.sh --debug file.jnlp`). `bash linux/install.sh --uninstall` removes it all again.
+
+**macOS:** the Mac app runs IPMIView and .jnlp files with the agent, see [mac/README.md](mac/README.md).
 
 
 ## Manual installation
@@ -27,12 +30,23 @@ I did not test any of this on macOS. But it's probably not hard to create an Aut
 ### AutoHotkey (Windows only)
 
  - Install [AutoHotkey](https://www.autohotkey.com/) v2, e.g. via `winget install AutoHotkey.AutoHotkey --scope machine`
- 
- - Copy `iKVM-KeyPasta.ahk` and the `PPCH_outlined_*.ico` files to `%ProgramFiles%\iKVM-KeyPasta\` and run it from there.  
-   It runs with UI Access, which can control programs running as admin: in a folder you can write to, any program running as you could change the script and so get that control.  
+
+ - Copy `iKVM-KeyPasta.ahk` and the `PPCH_outlined_*.ico` files from the `windows` folder to `%ProgramFiles%\iKVM-KeyPasta\` and run it from there.  
+   It runs with UI Access, which can control programs running as admin: in a folder you can write to, any program running as you could change the script and so get that control.
 
    - Alternatively, compile it into an exe yourself (I will not publish executable binaries), and put that there instead.  
-   Windows only grants UI Access to an exe in a protected folder (see [Admin rights](#admin-rights)).
+   Windows only grants UI Access to an exe that is signed and in a protected folder like `%ProgramFiles%`. Example for signing and trusting a self-signed certificate (PowerShell):
+
+   ```
+   $cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=My AHK UIAccess" -CertStoreLocation Cert:\CurrentUser\My
+   $tmp = "$env:TEMP\ahk_uia.cer"
+   Export-Certificate -Cert $cert -FilePath $tmp | Out-Null
+   Import-Certificate -FilePath $tmp -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
+   Import-Certificate -FilePath $tmp -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
+   Remove-Item $tmp
+   $installedcert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object Subject -eq "CN=My AHK UIAccess"
+   Set-AuthenticodeSignature -FilePath "iKVM-KeyPasta.exe" -Certificate $installedcert
+   ```
 
 ### HTML5 viewer userscript
 
@@ -46,20 +60,19 @@ I did not test any of this on macOS. But it's probably not hard to create an Aut
 
 ### Java agent
 
- - Copy `iKVM-KeyPasta-agent.jar` to a protected location on your system. Usually `%ProgramFiles%\iKVM-KeyPasta\` or `/opt/iKVM-KeyPasta/`.  
+ - Copy `iKVM-KeyPasta-agent.jar` to a protected location on your system. Usually `%ProgramFiles%\iKVM-KeyPasta\`.  
+   The viewer runs as admin on Windows and loads the jar. In a folder you can write to, any program running as you could replace it and get admin rights. On Linux the viewer runs as you: a jar in your home is fine, a system-wide one belongs to root.
 
-   The viewer will run as admin (on Windows at least) and load the jar. In a folder you can write to, any program running as you could replace it and get admin rights.  
-
- - To load the agent with iKVM, set the environment variable `JAVA_TOOL_OPTIONS` to `-javaagent:` followed by the full path of `iKVM-KeyPasta-agent.jar`.   
+ - To load the agent with iKVM, set the environment variable `JAVA_TOOL_OPTIONS` to `-javaagent:` followed by the full path of `iKVM-KeyPasta-agent.jar` (no spaces in it).  
    If the viewer is not started as admin, it will request admin elevation and not work otherwise. This elevation will use a new environment which may not have the variable, so either:
 
-   - Set the environment permanently. Simplest, but caveat: 
+   - Set the environment permanently. Simplest, but caveat:  
    ***Remember*** to **remove this variable** before deleting or moving the `iKVM-KeyPasta-agent.jar`!  
-   An inaccessible path in -javaagent will cause *any* Java program to *silently* not start anymore.  
+   An inaccessible path in -javaagent will cause *any* Java program to *silently* not start anymore.
 
-   - Set the envvar in an elevated environment and start the viewer (via IPMIView or OpenWebStart) from there.  
+   - Set the variable in an elevated environment and start the viewer (via IPMIView or OpenWebStart) from there.
 
-   - Recommended on Windows: Just use the `IPMIView with KeyPasta` start menu shortcut and associate .jnlp files to open with the provided launcher.
+   - Recommended: on Windows, use the `IPMIView with KeyPasta` Start menu shortcut and open .jnlp files with the provided launcher; on Linux, the IPMIView launcher from `linux/install.sh`; on macOS, the Mac app. They set the variable for IPMIView and its viewers only.
 
  - If the viewer's title ends with ⌨, the agent is loaded.
 
@@ -72,12 +85,22 @@ Java 11 and newer no longer come with a program for .jnlp files (`javaws`). [Ope
    ```
    ows.jvm.manager.versionRange=1.8*
    ```
-3. Windows: add OpenWebStart's folder (usually `C:\Program Files\OpenWebStart`) to your `PATH`, otherwise starting a .jnlp fails with something like "javaws not found" (the jnlp launcher tries to fix that).  
+3. Windows: add OpenWebStart's folder (usually `C:\Program Files\OpenWebStart`) to your `PATH`, otherwise starting a .jnlp fails with something like "javaws not found" (the jnlp launcher tries to fix that).
 
 Notes:
 
-- Apple Silicon Macs: the .jnlp brings the viewer's native library only for Intel Macs. If the viewer doesn't start, it probably needs an Intel Java 8 (runs through Rosetta 2).
+- Apple Silicon Macs: the .jnlp brings the viewer's native library only for Intel Macs. The viewer needs an Intel Java (runs through Rosetta 2), set in the Mac app's preferences.
 - Current Java 8 refuses TLS 1.0 and 1.1. If an old BMC fails with "connection failed", enable them again for that Java (`jdk.tls.disabledAlgorithms` in its `java.security`).
+
+### Open .jnlp files with the custom handler
+
+Linux: `linux/install.sh` does it (see Quick install). Windows:
+
+Run `iKVM-jnlp-launcher.cmd /register` (not as admin) where it's installed: `windows\install.cmd` puts it in `%ProgramFiles%\iKVM-KeyPasta\` next to the jar (by hand: copy it there from the `windows` folder together with `iKVM-KeyPasta-agent.jar` and `PPCH_outlined_dark.ico`). Then in the right-click › "Open with" dialog, make it the default for all .jnlp files.
+
+It takes care of elevation and setting the environment, and keeps your Downloads folder clean of iKVM's launch.jnlp files by moving them to `%TEMP%\iKVM-KeyPasta`. Other .jnlp files go to OpenWebStart unchanged.
+
+`/unregister` removes it again. Started without arguments, it opens the launch.jnlp in your Downloads folder.
 
 ### Java iKVM viewer setup
 
@@ -85,18 +108,7 @@ The Java iKVM viewer comes either from IPMIView or as a `.jnlp` file from the BM
 
  * Leave "Keyboard layout" at its default (English). Surprisingly, this setting may be saved and read from the remote machine.
  * Don't set "Repeat Key timeout" to 0 ms (default 200 ms): lock keys (CapsLock, NumLock, ScrollLock) don't reach the remote then.
- * Because the AHK script captures Alt+Tab, you may want to remember what hotkey "Exit Remote Location" is bound to (default is `F2`). 
-
-
-### Open .jnlp files with the custom handler
-
-Run `iKVM-jnlp-launcher.cmd /register` (not as admin) and in the right-click -> "Open with" dialog make it the default launcher for all .jnlp files.  
-
-It takes care of elevation and setting the environment, and keeps your Downloads directory clean of iKVM's launch.jnlp files by moving them to the `%TEMP%\iKVM-KeyPasta` directory.  
-
-  `/unregister` removes it again.
-
-If you just start the cmd file (without arguments) it will do the same, but only with the launch.jnlp in your Downloads directory.
+ * Because the AHK script captures Alt+Tab, you may want to remember what hotkey "Exit Remote Location" is bound to (default is `F2`).
 
 
 ## Usage
@@ -106,13 +118,21 @@ Type as usual. Everything only acts in iKVM windows:
 - Java app: windows titled `Java iKVM Viewer [...]` or `Java iKVM Viewer v1.69.44 [...]` (with the agent active, the title ends with ⌨)
 - HTML5 viewer: tabs titled `Resolution:... FPS :...` (with the userscript active, the title ends with ⌨)
 
-**Paste:** `Alt+Shift+V`, on macOS `Cmd+Shift+V` (configurable, by letter like Ctrl+V: `PasteHotkey` in the AutoHotkey script, `paste=` for the agent) types the clipboard into the remote, for a Swiss layout on the remote. If the result is garbled (the remote uses another layout), turn CapsLock on and paste again (safe paste): slower, but works with any layout, as everything is sent as alt codes. Turn CapsLock off again afterwards (it toggles on the remote, too). A running paste stops when you switch to another window or press Esc. If the text has line breaks or AltGr characters (harmful on a non-Swiss remote) or characters that aren't on the keyboard (typed slowly as Alt + number), you're asked first: fast paste, safe paste or cancel (tray menu "Non-ASCII characters" to never ask about the latter). In other programs, `Alt+Shift+V` pastes plain text (AutoHotkey; can be turned off in the tray menu). Where the agent or the userscript is active, it pastes itself, with the same dialog (AutoHotkey leaves the hotkey to it); without them, AutoHotkey pastes. The userscript needs the BMC opened with `https://` (browsers give the clipboard to secure pages only), and the browser may ask for permission to read it (Firefox shows a small "Paste" button each time).
+**Paste** types the clipboard into the remote: `Alt+Shift+V`, on macOS `⌥⇧V` or `⇧⌘V` in the Java viewer and `⇧⌘V` in the browser.
+
+- It types for the remote's keyboard layout: Swiss German, Swiss French, German or United States. By default the first of these among your local layouts, else Swiss German. Set it in the AutoHotkey tray menu ("Remote layout"), in the Java viewer's Options › KeyPasta Agent, or in the userscript's settings. All three keep it per BMC.
+- Garbled result (the remote uses another layout)? Turn CapsLock on and paste again (safe paste): slower, but works with any layout, as everything is sent as alt codes. Turn CapsLock off again afterwards (it toggles on the remote, too).
+- Text with line breaks or AltGr characters, or with characters that aren't on the keyboard (typed slowly as Alt + number): you're asked first, fast paste, safe paste or cancel. Once the remote layout is set, only the latter are asked about, and that can be set ahead too.
+- Switching to another window or pressing Esc stops a running paste.
+- In other programs, `Alt+Shift+V` pastes plain text (AutoHotkey; can be turned off in the tray menu).
+- The userscript needs the BMC opened with `https://` (browsers give the clipboard to secure pages only), and the browser may ask for permission to read it (Firefox shows a small "Paste" button each time).
 
 **Ctrl+Alt+End** (left Alt, AutoHotkey) sends Ctrl+Alt+Del to the remote, as in Remote Desktop: the real one always goes to the local Windows. It asks first (Cancel is the default), as on a Linux console Ctrl+Alt+Del reboots the server right away. The dialog's "Don't ask again for 4 hours" turns the question off for a while; `ConfirmCtrlAltDel := false` at the top of the script turns it off for good.
 
 **Alt+Tab** in the Java app goes to the remote (AutoHotkey), like the other keys. To switch windows locally, use Win+Tab or the mouse. (The HTML5 viewer can't get it: there, Alt+Tab switches locally.)
 
 **Tray menu** (AutoHotkey):
+- Remote layout: for the BMC of the last active Java viewer
 - Remote OS: Linux console or Windows, only matters for alt codes of € and the other Windows-1252 special characters (curly quotes, dashes, ...)
 - Non-ASCII characters: ask, always include or always omit them when pasting
 - Alt+Shift+V pastes in: any window (plain text in other programs) or iKVM windows only
@@ -120,11 +140,13 @@ Type as usual. Everything only acts in iKVM windows:
 
 ### Advanced configuration
 
-**Agent options:** `-javaagent:...jar=name=value,name=value`: `paste=alt+shift+V` (hotkey; default on macOS `cmd+shift+V`), `pasteNonAscii=ask` (`always`, `never`), `remoteOs=linux` (`windows`), `remoteLayout=auto` (`de-CH`, `fr-CH`; auto: the local one if Swiss French, else Swiss German), `localLayout=auto` (macOS only: `de-CH`, `fr-CH`, `us`; auto: from the input language, or the system's region if that has none), `keyDelay=2` (ms per key when pasting), `log=path` (debug log). Unknown options and values are ignored with a message on the console.
+**Agent options:** `-javaagent:...jar=name=value,name=value`: `paste=alt+shift+V` (hotkey, on macOS too), `pasteNonAscii=ask` (`always`, `never`), `remoteOs=linux` (`windows`), `remoteLayout=auto` (the default layout: `us`, `de-CH`, `fr-CH`, `de-DE`, `other` (alt codes); auto: Swiss German; the dialog's setting wins), `localLayout=auto` (macOS only: `de-CH`, `fr-CH`, `de-DE`, `us`; auto: the current input source), `keyDelay=2` (ms per key when pasting), `mouseRate=60` (mouse moves sent to the BMC per second at most, `0`: every one), `log=path` (debug log). Unknown options and values are ignored with a message on the console.
 
-**Userscript settings** (at the top of the script): `REMOTE_LAYOUT` (`"de-CH"` or `"fr-CH"`, for fast paste), `PASTE_NON_ASCII` (`"ask"`, `"always"`, `"never"`), `KEY_DELAY` (ms per keystroke when pasting), `remoteWindows` (`false`: Linux console, `true`: Windows, only matters for alt codes of € and the other Windows-1252 special characters; can also be changed in the paste dialog). Its paste hotkey is fixed: `Alt+Shift+V`, on macOS `Cmd+Shift+V`.
+**Userscript settings** (the extension's menu, "KeyPasta settings…", in the viewer's tab): the remote's keyboard layout, a default (Swiss German unless set) and this BMC's own (by host), characters not on the keyboard (ask, alt codes, leave out), the remote system for alt codes (Linux console, Windows; also in the paste dialog). Kept in the extension's storage, not in the BMC's site data. Its paste hotkey is fixed. `KEY_DELAY` (ms per keystroke when pasting) is at the top of the script.
 
-**Launcher settings** (top of iKVM-jnlp-launcher.cmd): `JNLP` (file used when started without one), `OWS` (OpenWebStart folder), `JAVAVERSION` (Java version for the viewer, default `1.8*`, empty: as the .jnlp asks).
+**AutoHotkey settings** (top of the script): `PasteHotkey`, `ConfirmCtrlAltDel`, and the paste speeds `JavaKeyDelay`, `JavaKeyPressDuration`, `HtmlKeyDelay`.
+
+**Launcher settings** (top of `iKVM-jnlp-launcher.cmd`): `JNLP` (file used when started without one), `OWS` (OpenWebStart folder), `JAVAVERSION` (Java version for the viewer, default `1.8*`, empty: as the .jnlp asks).
 
 
 ## What works where
@@ -148,64 +170,11 @@ Alt codes only exist on the Linux console and on Windows:
 - Windows only reads them with NumLock on (on the remote): with NumLock off, the numpad digits arrive as arrow keys, Home, End etc.
 
 
-## Technical details
+## How it works
 
-### Java app
+What each part does, how and why (including what was tried and dropped): [DOCUMENTATION.md](DOCUMENTATION.md).
 
-The Java app doesn't forward key positions. It turns each Windows key code into a Java key code, via the character the key produces on the *local* layout, and looks that up in a fixed US table. With a Swiss layout several positions (`^`, `¨`, `$`, `-`) can't be reached at all, AltGr arrives with an extra Ctrl, and Y/Z are swapped.
-
-**With the agent:** a `KeyEventDispatcher` sees every key event before the viewer and gives each key of the main block the US key code of its physical position, so iKVM's US table turns it into exactly that position. The position comes from Java's key event: the scan code on Windows, the X keycode on Linux. macOS doesn't pass it to Java, but gives every key except letters and digits the US key code of its position anyway. For letters and digits the agent derives the position with a known local layout (Swiss German, Swiss French or US, see `localLayout=` above; untested so far), and maps Command to the remote's Windows key. Input methods are switched off for the viewer (on Linux they swallowed dead keys). The rest works as described below for AutoHotkey, inside Java: the AltGr Ctrl dropped, left Ctrl followed by an F24 release, CapsLock as one tap (Windows), paste with key events into the viewer. Nothing in iKVM is changed, so any viewer version works as long as its key class is `tw.com.aten.ikvm.ui.RemoteVideo`.
-
-**AutoHotkey only:** the Java runtime builds its key table from the layout named in the last `WM_INPUTLANGCHANGE` message it received. The script sends it such a message naming the US layout whenever an iKVM Java window becomes active (and again after a layout change). Windows stays on the Swiss layout, only Java's table changes. The script then sends each physical key of the main block as the US key code of that position, whatever the local layout (the ISO key as F21, which iKVM maps there), and drops the extra Ctrl Windows adds to AltGr. On suspend and exit, Java gets its real table back.
-
-If the US layout isn't loaded, it's loaded in the background (not activated, not shown in the language bar) and unloaded on exit.
-
-Lock keys only work on the remote when iKVM sends them as one press+release message, which it only does for keys released within its "Repeat Key timeout" (stable keyboard mode, default on, 200 ms). The script therefore sends every CapsLock press as one quick tap (NumLock and ScrollLock: press them briefly). In the same mode, a pressed key is held back until the next key goes down, except left Ctrl, which is dropped then. A key release however sends it: so left Ctrl is followed by the release of F24 (never pressed: no effect on Linux or Windows remotes).
-
-Windows opens its task switcher for every Alt+Tab, even one sent by a program, before the Java app sees it. So the script blocks the Tab and posts it to the Java window directly as a window message. Ctrl+Alt+End works the same way: a Delete sent while Ctrl and Alt are held would still make a local Ctrl+Alt+Del, so after the confirmation, Ctrl and Alt are sent and the Delete is posted to the viewer window (Java app and browser).
-
-The viewer's own "Keyboard layout" setting would change things too (Germany: Y/Z and minus), but it's stored per BMC; "Swiss" in that list has no effect at all on typing.
-
-### HTML5 viewer
-
-The viewer (an old noVNC) turns the typed *character* into the US key position of that character (`ast2100.js`), sends only left-hand modifiers and never AltGr, and has nothing for the ISO key.
-
-- **With the userscript:** it replaces the viewer's keyboard handling and sends the browser's physical key position (`event.code`) as USB key code, right Alt and ISO key included. It appends ` ⌨` to the page title, so the script knows it's there and leaves the keys alone.
-- **Without:** the script sends, for each key, the character US has at that position (as Unicode), so the viewer maps it back to the right position. AltGr characters and the ISO key go as alt codes, as the viewer can't send them.
-
-### Paste
-
-The agent and the userscript paste the same way as the AutoHotkey script, from inside the viewer. Each character is typed with the key that produces it on the remote's layout, sent the same way as typed keys. That layout is assumed to be the local one if it's Swiss, otherwise Swiss German (agent: `remoteLayout=`; userscript: Swiss German unless `REMOTE_LAYOUT` says otherwise). If a character is on several keys, the one with the fewest modifiers wins. Dead-key characters and everything not on the keyboard are sent as alt codes (`Alt`+numpad):
-
-- Windows reads `Alt+nnn` as OEM code page and `Alt+0nnn` as ANSI, the Linux console reads both as Unicode. 160-255 always get the leading 0 and work on both, only the Windows-1252 characters 128-159 differ (tray menu: Remote OS).
-- Line breaks are sent as one Enter each.
-
-Safe paste (CapsLock on): everything as alt codes except line breaks, Tab and Space (keys that are the same on every layout).
-
-Speed: the Java app paces the keys itself (`JavaKeyDelay`, `JavaKeyPressDuration` at the top of the script). The HTML5 viewer takes keys much faster than the BMC types them: the rest would pile up in the BMC, freeze the viewer and keep typing after Esc. So the paste waits `HtmlKeyDelay` (10 ms) per keystroke there (userscript: `KEY_DELAY`).
-
-### Admin rights
-
-Windows refuses keystrokes and messages to programs running as admin (the iKVM Java app may), unless the script has UI Access or runs as admin itself. When that happens, the script restarts itself with UI Access (`AutoHotkey*_UIA.exe`, part of the AutoHotkey installation), or else as admin (UAC prompt). If that's declined, a notification says so, and the first entry of the tray menu tries again.
-
-Starting the script again closes the running one, whether .ahk or compiled exe, from any folder (both would remap the keys). If the running one has such rights, it's closed the same way: the new one first restarts itself with the same rights (Windows doesn't let a normal process close it).
-
-A compiled exe requesting UI Access in its manifest only gets UIA granted when it's located in a protected folder like `%ProgramFiles%` and is signed. Example for signing and trusting a self-signed certificate (PowerShell):
-
-```
-$cert = New-SelfSignedCertificate -Type CodeSigningCert -Subject "CN=My AHK UIAccess" -CertStoreLocation Cert:\CurrentUser\My
-$tmp = "$env:TEMP\ahk_uia.cer"
-Export-Certificate -Cert $cert -FilePath $tmp | Out-Null
-Import-Certificate -FilePath $tmp -CertStoreLocation Cert:\LocalMachine\Root | Out-Null
-Import-Certificate -FilePath $tmp -CertStoreLocation Cert:\LocalMachine\TrustedPublisher | Out-Null
-Remove-Item $tmp
-$installedcert = Get-ChildItem Cert:\CurrentUser\My -CodeSigningCert | Where-Object Subject -eq "CN=My AHK UIAccess"
-Set-AuthenticodeSignature -FilePath "iKVM-KeyPasta.exe" -Certificate $installedcert
-```
-
-### Debug mode
-
-`DebugMode := true` in the script records key history, executed lines and a log of the messages to the Java app, viewable from the tray menu. Never leave it on: the key history contains passwords.
+**Debug mode** (AutoHotkey): `DebugMode := true` in the script records key history, executed lines and a log of the messages to the Java app, viewable from the tray menu. Never leave it on: the key history contains passwords. The agent's log: `log=` (see Advanced configuration); it never contains typed keys.
 
 
 ## Licenses

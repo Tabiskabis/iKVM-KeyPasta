@@ -1,0 +1,76 @@
+#!/usr/bin/python3
+# bmc-check HOST: can this container reach a BMC the way IPMIView does?
+#   docker exec ikvm-console bmc-check 192.0.2.40     (podman exec ... with Podman)
+# IPMIView talks IPMI over UDP 623 (RMCP/RMCP+: its BMC status, login, sensors), the console
+# over TCP (5900 through its stunnel, 623 virtual media, 443/80 web). Checked here: name lookup,
+# UDP 623 (an ASF presence ping and an IPMI "Get Channel Authentication Capabilities", what
+# ipmitool sends first), the TCP ports, and how this container's x86 code runs (Rosetta or
+# QEMU emulation on an Apple Silicon Mac). No ping: ICMP doesn't pass the user-mode networks of
+# Podman and Colima, IPMIView's status for a BMC doesn't depend on it.
+import socket
+import sys
+import time
+
+def udp(host, data, what):
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    s.settimeout(3)
+    try:
+        t = time.time()
+        s.sendto(data, (host, 623))
+        reply, src = s.recvfrom(1024)
+        print("  UDP 623 %-34s answered: %d bytes from %s, %.0f ms" % (what, len(reply), src[0], (time.time() - t) * 1000))
+        return True
+    except socket.timeout:
+        print("  UDP 623 %-34s NO ANSWER (3 s)" % what)
+    except OSError as e:
+        print("  UDP 623 %-34s failed: %s" % (what, e))
+    finally:
+        s.close()
+    return False
+
+def tcp(host, port):
+    t = time.time()
+    try:
+        socket.create_connection((host, port), timeout=3).close()
+        print("  TCP %-5d open (%.0f ms)" % (port, (time.time() - t) * 1000))
+    except socket.timeout:
+        print("  TCP %-5d NO ANSWER (3 s)" % port)
+    except OSError as e:
+        print("  TCP %-5d %s" % (port, e))
+
+def emulation():
+    try:
+        info = open("/proc/cpuinfo").read()
+    except OSError:
+        return "unknown"
+    if "VirtualApple" in info:
+        return "Rosetta (Apple Silicon)"
+    if "CPU implementer" in info or "aarch64" in info.lower():
+        return "QEMU emulation of x86 on ARM (slow; Java's networking less reliable)"
+    return "x86, native"
+
+def route():
+    try:
+        for line in open("/proc/net/route").read().splitlines()[1:]:
+            f = line.split()
+            if f[1] == "00000000":
+                g = int(f[2], 16)
+                return "%s via %d.%d.%d.%d" % (f[0], g & 255, g >> 8 & 255, g >> 16 & 255, g >> 24)
+    except OSError:
+        pass
+    return "unknown"
+
+if len(sys.argv) != 2:
+    sys.exit("usage: bmc-check HOST")
+name = sys.argv[1]
+print("x86 code runs as: " + emulation())
+print("default route:    " + route())
+try:
+    host = socket.gethostbyname(name)
+    print("%s -> %s" % (name, host))
+except OSError as e:
+    sys.exit("%s: name not found (%s)" % (name, e))
+udp(host, bytes.fromhex("0600ff06000011be80000000"), "ASF presence ping")
+udp(host, bytes.fromhex("0600ff07000000000000000000092018c88100388e04b5"), "IPMI channel auth capabilities")
+for port in (623, 5900, 443, 80):
+    tcp(host, port)

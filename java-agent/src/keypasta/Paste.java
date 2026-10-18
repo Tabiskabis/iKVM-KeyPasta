@@ -25,8 +25,8 @@ import javax.swing.JRadioButton;
 import javax.swing.SwingUtilities;
 
 /**
- * Paste hotkey (Alt+Shift+V, macOS Cmd+Shift+V): types the clipboard into the remote, every
- * character on the keyboard as its keys on a Swiss remote, the rest as alt codes (Alt + numpad
+ * Paste hotkey (Alt+Shift+V, macOS Option+Shift+V): types the clipboard into the remote, every
+ * character on the keyboard as its keys on the remote's layout (see KeyFix.remoteLayout), the rest as alt codes (Alt + numpad
  * digits). With CapsLock on: safe paste, everything as alt codes except line breaks, Tab and
  * Space, which works with any remote layout. Asks first when it matters. Esc or leaving the
  * window stops it.
@@ -61,6 +61,8 @@ final class Paste {
     }
 
     /** Every key event of the user to the viewer. True: consumed. */
+    private int loggedNoHotkey;
+
     boolean handle(KeyEvent e) {
         int id = e.getID();
         int keyCode = e.getKeyCode();
@@ -72,7 +74,14 @@ final class Paste {
             else
                 heldModifiers.remove(key);
         }
-        boolean isPasteKey = keyCode == config.pasteKey || e.getExtendedKeyCode() == config.pasteKey;
+        // macOS: by the physical key if known (with Cmd held, macOS gave V as C on the user's Mac)
+        int kvk = MacKeys.kvk(e);
+        boolean isPasteKey = kvk >= 0 ? Layouts.usKey(MacKeys.position(kvk)) == config.pasteKey
+            : keyCode == config.pasteKey || e.getExtendedKeyCode() == config.pasteKey;
+        int mods = e.getModifiersEx() & MODIFIER_MASK;
+        if (Config.MAC && (mods & InputEvent.ALT_GRAPH_DOWN_MASK) != 0)
+            mods &= ~InputEvent.ALT_GRAPH_DOWN_MASK;   // right Option: Alt and AltGr in Java
+        boolean hotkeyMods = mods == config.pasteMods || mods == config.pasteModsAlt;
         if (id == KeyEvent.KEY_RELEASED && swallowed.remove(key))
             return true;
         // swallowed during the paste and still held: its key repeat reaches the remote now, its
@@ -95,8 +104,16 @@ final class Paste {
             // modifiers held since before (the hotkey's): down on the remote, their release goes through
             return !(id == KeyEvent.KEY_RELEASED && isModifier(keyCode));
         }
-        if (id == KeyEvent.KEY_PRESSED && isPasteKey
-                && (e.getModifiersEx() & MODIFIER_MASK) == config.pasteMods) {
+        if (id == KeyEvent.KEY_PRESSED && isPasteKey && (e.getModifiersEx() & MODIFIER_MASK) != 0
+                && (!config.enablePaste || !hotkeyMods)
+                && loggedNoHotkey < 5) {
+            loggedNoHotkey++;               // (a few: tells why a paste didn't start)
+            Log.d("paste key with " + InputEvent.getModifiersExText(e.getModifiersEx() & MODIFIER_MASK)
+                + ": not the paste hotkey (" + InputEvent.getModifiersExText(config.pasteMods)
+                + (config.enablePaste ? "" : ", paste turned off") + ")");
+        }
+        if (config.enablePaste && id == KeyEvent.KEY_PRESSED && isPasteKey && hotkeyMods) {
+            Log.d("paste hotkey");
             pasteKeyHeld = true;
             start(e.getComponent());
             return true;
@@ -112,6 +129,7 @@ final class Paste {
     }
 
     private void start(final Component viewer) {
+        config.useBmc(KeyFix.bmcOf(viewer));
         pasting = true;
         abort = false;
         boolean started = false;
@@ -167,7 +185,7 @@ final class Paste {
     private static final int ENTER = -1;
 
     private List<Item> plan(String text, boolean safe) {
-        Map<Character, int[]> table = Layouts.swiss(fix.remoteFrench());
+        Map<Character, int[]> table = Layouts.table(fix.remoteLayout());
         List<Item> items = new ArrayList<Item>();
         for (int i = 0; i < text.length(); ) {
             int cp = text.codePointAt(i);
@@ -201,11 +219,13 @@ final class Paste {
             Log.d("no text in the clipboard: " + e);
             return;
         }
-        if (text == null || text.isEmpty())
+        if (text == null || text.isEmpty()) {
+            Log.d("paste: clipboard empty");
             return;
+        }
         text = text.replace("\r\n", "\n").replace('\r', '\n');
 
-        boolean safe = capsLockOn();
+        boolean safe = config.pasteSafe || capsLockOn();
         boolean sendNonAscii = !config.pasteNonAscii.equals("never");
         List<Item> items = plan(text, safe);
 
@@ -232,15 +252,18 @@ final class Paste {
                     beyond++;
             }
         }
-        boolean askLayout = !safe && (lineBreaks > 0 || altGr > 0);
+        // the remote's layout unknown (not said in the KeyPasta dialog): line breaks and AltGr risky
+        boolean askLayout = !safe && !config.remoteLayoutChosen && (lineBreaks > 0 || altGr > 0);
         int slow = control + codepage + unicode;
         boolean askSlow = config.pasteNonAscii.equals("ask") && slow > 0;
         if (askLayout || askSlow) {
             StringBuilder msg = new StringBuilder("<html><body style='width: 330px'>");
             if (askLayout)
                 msg.append("• Includes line breaks or AltGr characters (@ # | { } …): if the remote system ")
-                    .append("doesn't use a Swiss layout, garbled commands could run. Safe paste works with any ")
-                    .append("layout, but is slower.<br><br>");
+                    .append("doesn't use the ").append(Layouts.name(fix.remoteLayout()))
+                    .append(" layout, garbled commands could run. Safe paste works with any ")
+                    .append("layout, but is slower. (Options, KeyPasta Agent: say this BMC's layout, ")
+                    .append("and this isn't asked again.)<br><br>");
             if (askSlow) {
                 msg.append("• ").append(slow).append(slow > 1 ? " characters" : " character")
                     .append(" not on the keyboard: typed slowly as Alt + number.");
@@ -271,10 +294,13 @@ final class Paste {
                 safe = true;
                 items = plan(text, true);
             }
-            if (!refocus(viewer))
+            if (!refocus(viewer)) {
+                Log.d("paste: the viewer window didn't get the focus back after the dialog");
                 return;
+            }
         }
 
+        Log.d("paste: " + items.size() + " characters, " + (safe ? "safe" : "fast, " + fix.remoteLayout()));
         type(viewer, items, sendNonAscii);
     }
 
@@ -345,7 +371,7 @@ final class Paste {
             if (item.key == null && !sendNonAscii && !(cp >= 32 && cp <= 126))
                 continue;
             if (abort || !window.isFocused()) {
-                Log.d("paste stopped");
+                Log.d("paste stopped: " + (abort ? "Esc" : "viewer window not focused"));
                 return;
             }
             if (item.key == null)

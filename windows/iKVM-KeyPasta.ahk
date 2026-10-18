@@ -43,12 +43,20 @@ if (ExitOnly) {             ; no tray icon, no hotkeys while it waits for the ot
 
 
 ; Individual Configuration (* is the suggested default)
-; PasteInOtherApps, PasteNonAscii and RemoteWindows are the defaults at startup,
-; they can be changed at runtime in the tray menu.
+; RemoteLayoutSetting, PasteInOtherApps, PasteNonAscii and RemoteWindows are the defaults at
+; startup, they can be changed at runtime in the tray menu.
 
 PasteHotkey := "!+v"        ; * Alt+Shift+V: paste hotkey, AutoHotkey style: modifiers (^ Ctrl, ! Alt,
                             ;   + Shift, # Win), then the key: by its letter like Ctrl+V, so on
                             ;   whichever key the local layout has it
+
+RemoteLayoutSetting := "auto" ; layout of the remote, for pasting: "de-CH" Swiss German, "fr-CH" Swiss
+                            ;   French, "de-DE" German, "us" United States, "other": always safe paste
+                            ;   (alt codes, any layout). * "auto": the first of these four in the
+                            ;   input language list (Windows settings), else Swiss German; a paste
+                            ;   with line breaks or AltGr characters then asks first. A layout chosen
+                            ;   in the tray menu for an iKVM Java window is kept for its BMC (the
+                            ;   [host] in its title; registry HKCU\Software\iKVM-KeyPasta\RemoteLayout)
 
 PasteInOtherApps := true    ;  true: * activate shortcut for pasting clipboard to other programs, too
                             ; false:   use the hotkey for iKVM Java/HTML windows only
@@ -92,17 +100,36 @@ CtrlSent := false           ; left Ctrl sent down, see *LCtrl
 CtrlPending := false        ; left Ctrl is being held back right now, see *LCtrl
 JavaPasting := false        ; pasting into iKVM Java, see PasteIntoKvm
 JavaPasteSc := 0            ; the paste hotkey's key while it's held, see JavaKey
+RemoteLayoutChosen := RemoteLayoutSetting != "auto"    ; said by the user: a paste doesn't ask about it
 for Arg in A_Args {
     if (RegExMatch(Arg, "i)^/elevate-stage=(\w+)$", &Match))
         ElevationStage := Match[1]
     if (!RegExMatch(Arg, "^/set:(\w+)=(.*)$", &Match))
         continue
     switch Match[1] {
+        case "RemoteLayoutSetting": RemoteLayoutSetting := Match[2]
+        case "RemoteLayoutChosen":  RemoteLayoutChosen := Integer(Match[2])
         case "PasteInOtherApps":    PasteInOtherApps := Integer(Match[2])
         case "PasteNonAscii":       PasteNonAscii := (Match[2] = "ask") ? "ask" : Integer(Match[2])
         case "RemoteWindows":       RemoteWindows := Integer(Match[2])
         case "CtrlAltDelQuietUntil": CtrlAltDelQuietUntil := Match[2]
     }
+}
+
+; Remote layouts for fast paste: setting -> KLID and name (tray menu order)
+RemoteLayouts := Map("de-CH", {Klid: "00000807", Name: "Swiss German"}, "fr-CH", {Klid: "0000100C", Name: "Swiss French"}
+    , "de-DE", {Klid: "00000407", Name: "German"}, "us", {Klid: "00000409", Name: "United States"})
+RemoteLayoutOrder := ["de-CH", "fr-CH", "de-DE", "us"]
+RemoteLayoutKey := "HKCU\Software\iKVM-KeyPasta\RemoteLayout"   ; value per BMC, see LayoutFor
+CurrentBmc := ""            ; BMC of the last active iKVM window ("" HTML5 or none), see NoteActiveBmc
+if (RemoteLayoutSetting != "other" and !RemoteLayouts.Has(RemoteLayoutSetting)) {
+    ; "auto" (or unknown): the first one in the input language list, else Swiss German
+    RemoteLayoutSetting := "de-CH"
+    for DetectCode in RemoteLayoutOrder
+        if (IsConfiguredLayout(RemoteLayouts[DetectCode].Klid)) {
+            RemoteLayoutSetting := DetectCode
+            break
+        }
 }
 
 ; The paste hotkey's parts (see IsPasteKey, WaitForHotkeyRelease) and its readable name
@@ -184,7 +211,9 @@ RestartPrivileged(Notify := true) {
     ElevationFailed := true
     if (A_IsAdmin or HasUIAccess())     ; got refused anyway, more isn't possible
         return
-    Settings := " /set:PasteInOtherApps=" PasteInOtherApps
+    Settings := " /set:RemoteLayoutSetting=" RemoteLayoutSetting
+        . " /set:RemoteLayoutChosen=" RemoteLayoutChosen
+        . " /set:PasteInOtherApps=" PasteInOtherApps
         . " /set:PasteNonAscii=" PasteNonAscii
         . " /set:RemoteWindows=" RemoteWindows
         . " /set:CtrlAltDelQuietUntil=" CtrlAltDelQuietUntil
@@ -331,7 +360,41 @@ TitleChanged(HWinEventHook, Event, Hwnd, IdObject, IdChild, *) {
 
 WindowActivated(Hwnd) {
     WatchTitle(Hwnd)
+    NoteActiveBmc()
     HandleActiveWindow(Hwnd)
+}
+
+; The BMC of an iKVM Java window: the [host] in its title; "" if none
+BmcOfTitle(Title) {
+    return RegExMatch(Title, "^Java iKVM Viewer[^\[]*\[([^\]]+)\]", &BmcMatch) ? Trim(BmcMatch[1]) : ""
+}
+
+; The tray menu's remote layout is the one of the last active iKVM window's BMC
+NoteActiveBmc() {
+    global CurrentBmc
+    if (IsJavaKvm())
+        Bmc := BmcOfTitle(ActiveTitle())
+    else if (IsHtmlKvm())
+        Bmc := ""                   ; its title has no host: the default layout
+    else
+        return
+    if (Bmc != CurrentBmc) {
+        CurrentBmc := Bmc
+        BuildTrayMenu()
+    }
+}
+
+; Remote layout for a BMC: {Setting, Chosen}. Its own if chosen in the tray menu for it, else the
+; default (RemoteLayoutSetting).
+LayoutFor(Bmc) {
+    if (Bmc != "") {
+        try {
+            Saved := RegRead(RemoteLayoutKey, Bmc)
+            if (Saved = "other" or RemoteLayouts.Has(Saved))
+                return {Setting: Saved, Chosen: true}
+        }
+    }
+    return {Setting: RemoteLayoutSetting, Chosen: RemoteLayoutChosen}
 }
 
 
@@ -376,12 +439,15 @@ QuietLayout(Klid) {
     return Hkl
 }
 
-; Layout the remote uses, for pasting: the window's own if it's Swiss (German or French),
-; otherwise Swiss German
-RemoteLayout(Hwnd) {
-    Hkl := WindowLayout(Hwnd)
+; Layout the remote uses, for pasting: a setting of LayoutFor, not "other"
+RemoteLayout(Setting) {
+    return QuietLayout(RemoteLayouts[Setting].Klid)
+}
+
+; Swiss German or Swiss French (also as a variant)
+IsSwissLayout(Hkl) {
     High := (Hkl >> 16) & 0xFFFF
-    return (High = 0x0807 or High = 0x100C) ? Hkl : QuietLayout("00000807")
+    return High = 0x0807 or High = 0x100C
 }
 
 ; Is the layout (KLID) in the user's input language list (HKCU\Keyboard Layout\Preload,
@@ -468,6 +534,7 @@ HandleActiveWindow(Hwnd) {
     global JavaWatch
     if (A_IsSuspended or !Hwnd or Hwnd != WinExist("A") or !IsJavaKvm())
         return
+    NoteActiveBmc()                 ; (the .jnlp viewer sets its title with the host only once connected)
     if (!IsJavaPlain()) {           ; Java agent: its real table back, if told earlier
         SetTimer(WatchJavaLayout, 0)
         if (ToldJava.Has(Hwnd)) {
@@ -627,12 +694,12 @@ UsCharAtPosition := Map(
 ;   iKVM Java: the US key code of that position
 ;   iKVM/HTML5 (without the userscript): the US character of that position (see
 ;   HtmlFallbackKey), no AltGr
-; "" if it can't be typed that way (alt code instead): not on the keyboard, dead keys, and ¦
-; (AltGr+1 on Windows' Swiss layouts, but | on Linux).
+; "" if it can't be typed that way (alt code instead): not on the keyboard, dead keys, and on
+; the Swiss layouts ¦ (AltGr+1 on Windows, but | on Linux) and the dead keys' characters.
 PositionalKeysForChar(Char, Hkl) {
     if (Char = "`n")
         return "{Enter}"
-    if (InStr("´``^~¨¦", Char))
+    if (InStr("´``^~¨¦", Char) and IsSwissLayout(Hkl))
         return ""
     Table := CharKeyTable(Hkl)
     if (!Table.Has(Char))
@@ -776,7 +843,10 @@ SendClipboard(AltCodesOnly := false, SendNonAscii := "") {
     if (SendNonAscii = "")
         SendNonAscii := PasteNonAscii
     OriginalWinID := WinExist("A")
-    Hkl := AltCodesOnly ? 0 : RemoteLayout(OriginalWinID)
+    Layout := LayoutFor(BmcOfTitle(ActiveTitle()))
+    if (Layout.Setting = "other")           ; tray menu: always safe paste
+        AltCodesOnly := true
+    Hkl := AltCodesOnly ? 0 : RemoteLayout(Layout.Setting)
 
     ControlChars := 0
     CodepageChars := 0
@@ -799,7 +869,7 @@ SendClipboard(AltCodesOnly := false, SendNonAscii := "") {
     }
 
     ; One dialog for everything worth asking about:
-    ;  - Fast paste assumes a Swiss layout on the remote. With another one the text arrives
+    ;  - Fast paste assumes the remote uses RemoteLayoutSetting. With another one the text arrives
     ;    garbled, which is harmless, except for line breaks (Enter: a garbled command would run)
     ;    and AltGr characters (right Alt there: they would trigger shortcuts).
     ;  - Characters that aren't on the keyboard are sent as alt codes: slow, and whether they
@@ -814,13 +884,15 @@ SendClipboard(AltCodesOnly := false, SendNonAscii := "") {
                 AltGrChars++
         }
     }
-    AskLayout := LineBreaks or AltGrChars
+    ;    Not asked once the layout was said (tray menu or RemoteLayoutSetting).
+    AskLayout := (LineBreaks or AltGrChars) and !Layout.Chosen
     AskSlow := SendNonAscii = "ask" and (ControlChars + CodepageChars + UnicodeChars) > 0
     if (AskLayout or AskSlow) {
         MsgText := ""
         if (AskLayout)
-            MsgText .= "• Includes line breaks or AltGr characters (@ # | { } …): if the remote system doesn't use a Swiss"
-                . " layout, garbled commands could run. Safe paste works with any layout, but is slower.`n`n"
+            MsgText .= "• Includes line breaks or AltGr characters (@ # | { } …): if the remote system doesn't use the "
+                . RemoteLayouts[Layout.Setting].Name " layout, garbled commands could run. Safe paste works with"
+                . " any layout, but is slower. (Tray menu, Remote layout: say this BMC's, and this isn't asked again.)`n`n"
         if (AskSlow) {
             SlowChars := ControlChars + CodepageChars + UnicodeChars
             MsgText .= "• " SlowChars " character" (SlowChars > 1 ? "s" : "") " not on the keyboard:"
@@ -1169,6 +1241,11 @@ HotIf()
 
 ; Tray menu, rebuilt on every change. Each setting shows its current value in its own line,
 ; the submenu behind it lists the choices with the active one marked:
+;   Remote layout: Swiss German       > (•) Swiss German              (per BMC, see LayoutFor)
+;                                       ( ) Swiss French
+;                                       ( ) German
+;                                       ( ) United States
+;                                       ( ) Other (always safe paste)
 ;   Remote OS: Linux console          > (•) Linux console
 ;                                       ( ) Windows
 ;   Non-ASCII characters: Ask         > (•) Ask on every paste
@@ -1180,6 +1257,15 @@ HotIf()
 ;   Suspend hotkeys
 ;   Exit
 BuildTrayMenu() {
+    OtherLayout := "Other (always safe paste)"
+    Layout := LayoutFor(CurrentBmc)
+    LayoutLabel := Layout.Setting = "other" ? OtherLayout : RemoteLayouts[Layout.Setting].Name
+    LayoutMenu := Menu()
+    for LayoutCode in RemoteLayoutOrder
+        LayoutMenu.Add(RemoteLayouts[LayoutCode].Name, ((Setting, *) => SetRemoteLayout(Setting)).Bind(LayoutCode), "Radio")
+    LayoutMenu.Add(OtherLayout, (*) => SetRemoteLayout("other"), "Radio")
+    LayoutMenu.Check(LayoutLabel)
+
     RemoteLabel := RemoteWindows ? "Windows" : "Linux console"
     RemoteMenu := Menu()
     RemoteMenu.Add("Linux console", (*) => SetRemoteWindows(false), "Radio")
@@ -1206,6 +1292,7 @@ BuildTrayMenu() {
         Tray.Add("No UI Access or admin rights: iKVM Java window unreachable (click to try again)", RetryPrivileged)
         Tray.Add()
     }
+    Tray.Add("Remote layout" (CurrentBmc != "" ? " of " CurrentBmc : "") ": " LayoutLabel, LayoutMenu)
     Tray.Add("Remote OS: " RemoteLabel, RemoteMenu)
     Tray.Add("Non-ASCII characters: " NonAsciiLabel, NonAsciiMenu)
     Tray.Add(PasteHotkeyText " pastes in: " PasteWhereLabel, PasteWhereMenu)
@@ -1223,8 +1310,22 @@ BuildTrayMenu() {
     A_IconTip := (A_IsSuspended ? "SUSPENDED`n" : "")
         . PasteHotkeyText ": paste clipboard`n"
         . "With CapsLock on: safe paste`n"
-        . "Remote OS: " RemoteLabel "`n"
+        . "Remote: " (Layout.Setting = "other" ? "any layout" : LayoutLabel) ", " RemoteLabel "`n"
         . "Non-ASCII: " NonAsciiLabel
+}
+
+; For the BMC of the last active iKVM Java window (kept in the registry), else the default
+SetRemoteLayout(Value) {
+    global RemoteLayoutSetting, RemoteLayoutChosen
+    if (CurrentBmc != "") {
+        try RegWrite(Value, "REG_SZ", RemoteLayoutKey, CurrentBmc)
+        catch as Err
+            Log("  remote layout for " CurrentBmc " not saved: " Err.Message)
+    } else {
+        RemoteLayoutSetting := Value
+        RemoteLayoutChosen := true
+    }
+    BuildTrayMenu()
 }
 
 SetRemoteWindows(Value) {
