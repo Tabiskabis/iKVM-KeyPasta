@@ -24,6 +24,9 @@ import javax.imageio.ImageIO;
  * mode (icon-light-512.png from iKVM-KeyPasta-light-mode.svg). Java has no event for that: the
  * setting (defaults read -g AppleInterfaceStyle) is read again whenever macOS's global preferences
  * file changes, checked every 2 s.
+ *
+ * macOS: IPMIView's menus in the Mac menu bar, missing after IPMIView started (the app menu only):
+ * the viewer's remedy, ViewerWatch.installIpmiview.
  */
 final class Icons {
     static final String IPMIVIEW_MAIN = "IPMIView20/IPMIView20";
@@ -64,6 +67,11 @@ final class Icons {
 
     /** The first frame with an icon (IPMIView sets it before showing its main window). */
     private static void watchIpmiviewWindows() {
+        try {
+            ViewerWatch.installIpmiview();
+        } catch (Throwable t) {
+            Log.d("IPMIView watch not installed: " + t);
+        }
         for (Frame f : Frame.getFrames())
             ipmiviewWindow(f);
         java.awt.Toolkit.getDefaultToolkit().addAWTEventListener(new java.awt.event.AWTEventListener() {
@@ -167,7 +175,7 @@ final class Icons {
         }
     }
 
-    private static Image image(final String name) {
+    static Image image(final String name) {
         final Image[] out = new Image[1];
         Privileged.run(new Runnable() {
             @Override

@@ -200,12 +200,25 @@ final class Patch {
             : new String[][] {
                 {"com/supermicro/ipmi/stunnel/StunnelParameters", "setStunnelIP", "(Ljava/lang/String;)V", "object"},
                 {null, "getRandomConnectPort", "()I", "static"},
+                {null, "isPortUsed", "(I)Z", "static"},
                 {"java/lang/Thread", "sleep", "(J)V", "static"},
                 {"java/lang/Runtime", "exec", "(Ljava/lang/String;)Ljava/lang/Process;"}};
         try {
             return redirect(cf.clone(), targets, "keypasta/LaunchTiming", "KVM launch timing");
         } catch (Throwable t) {
             Log.d("KVM launch timing skipped: " + t);
+            return null;
+        }
+    }
+
+    /** macOS: StunnelUtility's StunnelFacotry.createStunnel becomes KeyPastaStunnel's (see MacStunnel). */
+    static byte[] redirectStunnel(byte[] cf) {
+        try {
+            return redirect(cf.clone(), new String[][] {{"com/supermicro/ipmi/stunnel/StunnelFacotry", "createStunnel",
+                "(Ljava/lang/String;I)Lcom/supermicro/ipmi/stunnel/BaseStunnel;", "static"}},
+                "com/supermicro/ipmi/stunnel/KeyPastaStunnel", "macOS encrypted console");
+        } catch (Throwable t) {
+            Log.d("macOS encrypted console redirect skipped: " + t);
             return null;
         }
     }

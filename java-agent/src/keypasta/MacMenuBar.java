@@ -11,6 +11,9 @@ package keypasta;
  * that program (JNI_OnLoad_keypasta, Java 8+ static libraries: System.loadLibrary finds it in the
  * running program), so no file of its own. Not run through java-launcher (plain java, an older
  * app): no redraw, logged once.
+ *
+ * Also there: noQuitShortcut, the viewer's Quit without Cmd+Q (it quit the viewer instead of
+ * reaching the remote; the menus take a shortcut before the window gets the key).
  */
 final class MacMenuBar {
     private static int state;           // 0 not tried, 1 loaded, -1 not there
@@ -20,17 +23,35 @@ final class MacMenuBar {
 
     private static native void redraw0();
 
-    static synchronized void redraw() {
+    private static native void noQuitShortcut0();
+
+    private static boolean loaded() {
         if (state == 0) {
             try {
                 System.loadLibrary("keypasta");
                 state = 1;
             } catch (Throwable t) {
                 state = -1;
-                Log.d("Mac menu bar not redrawn: the viewer doesn't run in java-launcher with it (" + t + ")");
+                Log.d("Mac menu bar: no native part, the viewer doesn't run in java-launcher with it (" + t + ")");
             }
         }
-        if (state != 1)
+        return state == 1;
+    }
+
+    /** The viewer's menus without the Cmd+Q shortcut (the item still quits when clicked). */
+    static synchronized void noQuitShortcut() {
+        if (!loaded())
+            return;
+        try {
+            noQuitShortcut0();
+            Log.d("Cmd+Q: no longer Quit's shortcut, it goes to the remote");
+        } catch (Throwable t) {
+            Log.d("Cmd+Q still quits: " + t);       // an older java-launcher: not fatal
+        }
+    }
+
+    static synchronized void redraw() {
+        if (!loaded())
             return;
         try {
             redraw0();

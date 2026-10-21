@@ -12,15 +12,20 @@
 #                      /root/screencap. Default: none (they stay in the container).
 #     --jnlp FILE      open a .jnlp (Java Web Start) instead of IPMIView: in a container of its own,
 #                      next to IPMIView's and other .jnlp ones (ikvm-jnlp-PORT, the first free port
-#                      of 6090-6099 unless --port is given), which ends with its viewer.
-#     --agent-args A   agent options (see Config.java), e.g. paste=ctrl+shift+V.
+#                      of 6201-6299 unless --port is given), which ends with its viewer.
+#     --agent-args A   agent options (see Config.java), e.g. mouseRate=30.
 #     --relax          accept the BMC's expired iKVM cert (roll the BMC clock back too).
 #     --viewer-tabs    each iKVM viewer IPMIView starts on a desktop of its own, in a browser tab
-#                      of its own: ports 6081-6089 (the app opens them as they come up).
+#                      of its own: ports 6101-6199 (the app opens them as they come up).
 #     --layout L       X keyboard layout (ch, ch(fr), de, gb, us). Default: us.
-#     --port N         browser port. Default: 6080 (IPMIView), 6090-6099 (.jnlp).
+#     --port N         browser port; VNC on N - 400. Default: 6100 (IPMIView), 6201-6299 (.jnlp).
+#     --lan            publish the ports on all of this computer's addresses (default: 127.0.0.1
+#                      only). Needs a password: VNC_PASSWORD in the environment (not an option, so
+#                      it's on no command line); with it, also on 127.0.0.1, VNC apps and the browser
+#                      view ask for it.
 #     --detach         start in the background (no interactive terminal); don't open the browser.
 #     --rebuild        rebuild the image.
+#     --debug          a .jnlp's IcedTea-Web says what it downloads and why that fails (-verbose).
 set -euo pipefail
 cd "$(dirname "$0")"
 # A double-clicked app gets a bare PATH; add the usual CLI locations so docker is found whether it
@@ -29,8 +34,8 @@ export PATH="$HOME/.orbstack/bin:/Applications/OrbStack.app/Contents/MacOS/xbin:
 
 IMAGE="ikvm-keypasta-console"
 NAME="ikvm-console"
-IPMIVIEW="" ; AGENT="" ; AGENT_ARGS="" ; VMEDIA_DIR="" ; SCREENCAP_DIR="" ; JNLP="" ; RELAX=false ; TABS=false
-LAYOUT="us" ; PORT="" ; REBUILD=false ; DETACH=false
+IPMIVIEW="" ; AGENT="" ; AGENT_ARGS="" ; VMEDIA_DIR="" ; SCREENCAP_DIR="" ; JNLP="" ; RELAX=false ; TABS=false ; DEBUG=false
+LAYOUT="us" ; PORT="" ; REBUILD=false ; DETACH=false ; BIND=127.0.0.1
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -45,7 +50,9 @@ while [ $# -gt 0 ]; do
         --layout)   LAYOUT="$2"; shift 2;;
         --port)     PORT="$2"; shift 2;;
         --detach)   DETACH=true; shift;;
+        --lan)      BIND=0.0.0.0; shift;;
         --rebuild)  REBUILD=true; shift;;
+        --debug)    DEBUG=true; shift;;
         *) echo "unknown option: $1" >&2; exit 1;;
     esac
 done
@@ -103,50 +110,71 @@ if [ -z "$JNLP" ]; then
         echo "No IPMIView found. Either install IPMIView, or open your BMC's .jnlp instead (--jnlp FILE)." >&2; exit 1; }
 fi
 
-# Rebuild when asked, when the image is missing, or when our Dockerfile/entrypoint changed since the
-# last build (tracked with a .built marker) — so an updated app never runs a stale image.
+# Rebuild when asked, when the image is missing, or when the files of this folder (Dockerfile,
+# entrypoint.sh, the scripts copied in) aren't the ones the image was built from: their checksum,
+# kept in the image as a label. Not by file dates (a .built marker before): every build of the app
+# copies this folder anew, so every app build rebuilt the image, changed or not.
+if command -v shasum >/dev/null; then SUM="shasum -a 256"; else SUM=sha256sum; fi
+HASH="$(find . -maxdepth 1 -type f ! -name '.*' | LC_ALL=C sort | while read -r f; do echo "$f"; cat "$f"; done | $SUM | cut -c1-16)"
 need_build=false
 $REBUILD && need_build=true
-docker image inspect "$IMAGE" >/dev/null 2>&1 || need_build=true
-{ [ Dockerfile -nt .built ] || [ entrypoint.sh -nt .built ] || [ keypasta.js -nt .built ] || [ keypasta-websockify -nt .built ] || [ bmc-check -nt .built ]; } && need_build=true
+BUILT="$(docker image inspect -f '{{ index .Config.Labels "ikvm-keypasta.files" }}' "$IMAGE" 2>/dev/null || true)"
+[ "$BUILT" = "$HASH" ] || need_build=true
 if $need_build; then
     echo "Building $IMAGE (amd64)… first build downloads the JRE; rebuilds reuse the cache offline."
     # Legacy builder (DOCKER_BUILDKIT=0) reuses the cached base image without re-resolving its tag from
     # docker.io on every rebuild — BuildKit does, and that fails on flaky/blocked/IPv6-broken networks.
-    if DOCKER_BUILDKIT=0 docker build --platform linux/amd64 -t "$IMAGE" .; then
-        touch .built
-    else
+    if ! DOCKER_BUILDKIT=0 docker build --platform linux/amd64 --label "ikvm-keypasta.files=$HASH" -t "$IMAGE" .; then
         echo "Image build failed (see above) — not starting a stale container." >&2
         exit 1
     fi
 fi
+# Earlier builds of the image, unnamed since (a rebuild names the new one), are never used again:
+# removed on every start, ours only (the Dockerfile's label), in the background.
+( docker image prune -f --filter "label=ikvm-keypasta=console" >/dev/null 2>&1 & )
 
+# .jnlp containers that ended stay (no --rm: the app reads their output, then removes them); those
+# left over (the app wasn't running) go now, their names free again.
+for n in $( (docker ps -a --filter status=exited --format '{{.Names}}' 2>/dev/null || true) ); do
+    case "$n" in ikvm-jnlp-*) docker rm "$n" >/dev/null 2>&1 || true ;; esac
+done
 # A .jnlp: a container of its own, next to IPMIView's and other .jnlp ones, named after its port
-# (the first of 6090-6099 no container of ours has). IPMIView's: one, on 6080.
+# (the first of 6201-6299 no container of ours has). IPMIView's: one, on 6100.
 if [ -n "$JNLP" ]; then
     if [ -z "$PORT" ]; then
         taken=" $( (docker ps -a --format '{{.Names}}' 2>/dev/null || true) | tr '\n' ' ') "
-        for p in $(seq 6090 6099); do
+        for p in $(seq 6201 6299); do
             case "$taken" in *" ikvm-jnlp-$p "*) ;; *) PORT=$p; break ;; esac
         done
-        [ -n "$PORT" ] || { echo "Ten .jnlp consoles are open already: stop one first." >&2; exit 1; }
+        [ -n "$PORT" ] || { echo "99 .jnlp consoles are open already: stop one first." >&2; exit 1; }
     fi
     NAME="ikvm-jnlp-$PORT"
 fi
-[ -n "$PORT" ] || PORT=6080
+[ -n "$PORT" ] || PORT=6100
 
 # clear any previous instance so --name is free and the port is released
 docker rm -f "$NAME" >/dev/null 2>&1 || true
 
-# Browser view only (noVNC on $PORT). We never publish 5900 on the host: x11vnc listens on 5900
-# *inside* the container for websockify, and exposing it would clash with whatever uses 5900 on the Mac.
-ARGS=( run --platform linux/amd64 --name "$NAME" -p "${PORT}:6080" )
-ARGS+=( -e "VNC_PORT=6080" -e "LAYOUT=${LAYOUT}" -e "IGNORE_EXPIRED_CERT=${RELAX}" )
+# The browser view (noVNC) on $PORT, and the same desktop for a VNC app (TigerVNC Viewer) on
+# $PORT - 400. Numbered, the last two digits the same for both:
+#   IPMIView 0: 6100/5700, its viewers 1-99: 6101-6199/5701-5799, .jnlp 1-99: 6201-6299/5801-5899
+# (59xx left alone: 5900 is macOS's own Screen Sharing, 5901 on other VNC servers'). On this
+# computer only (127.0.0.1) unless --lan: without a password, anyone on the network could use
+# IPMIView, with its saved BMC logins; so --lan needs one.
+if [ "$BIND" != 127.0.0.1 ] && [ -z "${VNC_PASSWORD:-}" ]; then
+    echo "Reachable from the network only with a password (VNC_PASSWORD): not started." >&2
+    exit 1
+fi
+VNC=$((PORT - 400))
+ARGS=( run --platform linux/amd64 --name "$NAME" -p "${BIND}:${PORT}:6080" -p "${BIND}:${VNC}:5900" )
+[ -n "${VNC_PASSWORD:-}" ] && ARGS+=( -e VNC_PASSWORD )      # the value from this environment
+ARGS+=( -e "VNC_PORT=6080" -e "LAYOUT=${LAYOUT}" -e "IGNORE_EXPIRED_CERT=${RELAX}" -e "KEYPASTA_DEBUG=${DEBUG}" )
 [ -n "$AGENT_ARGS" ] && ARGS+=( -e "AGENT_ARGS=${AGENT_ARGS}" )
-$TABS && [ -z "$JNLP" ] && ARGS+=( -e "VIEWER_TABS=true" -p "6081-6089:6081-6089" )
+$TABS && [ -z "$JNLP" ] && ARGS+=( -e "VIEWER_TABS=true" -p "${BIND}:6101-6199:6101-6199" -p "${BIND}:5701-5799:5701-5799" )
 [ -n "$IPMIVIEW" ] && ARGS+=( -v "${IPMIVIEW}:/ipmiview" )
 # IPMIView's settings, shared with the native start (ipmiview-keypasta.sh keeps them there too)
-SETTINGS="$HOME/.config/ipmiview"
+if [ "$(uname)" = Darwin ]; then SETTINGS="$HOME/Library/Application Support/IPMIView"
+else SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/ipmiview"; fi
 mkdir -p "$SETTINGS" && ARGS+=( -v "${SETTINGS}:/settings" )
 # Files for the container go to a folder in the home folder first: Colima and Podman share only
 # the home folder (and a few others) with their Linux VM. The app's agent copy is in the temp folder
@@ -154,6 +182,12 @@ mkdir -p "$SETTINGS" && ARGS+=( -v "${SETTINGS}:/settings" )
 # agent wasn't loaded. Each container its own copy, replaced whole (mv): a running one keeps its own.
 if [ "$(uname)" = Darwin ]; then SHARE="$HOME/Library/Application Support/iKVM-KeyPasta/container"
 else SHARE="${XDG_CACHE_HOME:-$HOME/.cache}/iKVM-KeyPasta/container"; fi
+# The agent's settings (agent.properties: KeyPasta Preferences, the paste hotkeys): the native
+# start's own folder, so both use the same file; keypasta-websockify reads the hotkeys from it too
+if [ "$(uname)" = Darwin ]; then AGENT_SETTINGS="$HOME/Library/Application Support/iKVM-KeyPasta"
+else AGENT_SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/iKVM-KeyPasta"; fi
+mkdir -p "$AGENT_SETTINGS"
+ARGS+=( -v "${AGENT_SETTINGS}:/keypasta-settings" -e "KEYPASTA_SETTINGS_DIR=/keypasta-settings" )
 mkdir -p "$SHARE/agent-$NAME"
 if [ -n "$AGENT" ] && [ -f "$AGENT" ]; then
     cp "$AGENT" "$SHARE/agent-$NAME/.new.jar" && mv -f "$SHARE/agent-$NAME/.new.jar" "$SHARE/agent-$NAME/iKVM-KeyPasta-agent.jar"
@@ -176,19 +210,19 @@ if [ -n "$JNLP" ]; then
     ARGS+=( -v "$SHARE/${NAME}.jnlp:/launch.jnlp:ro" -e "MODE=jnlp" -e "JNLP=/launch.jnlp" )
 fi
 
-URL="http://localhost:${PORT}/novnc/vnc.html?autoconnect=1&resize=remote"
+URL="http://localhost:${PORT}/"
 if $DETACH; then
     if [ -n "$JNLP" ]; then
-        ARGS+=( --rm -d "$IMAGE" )                    # gone when its viewer ends
+        ARGS+=( -d "$IMAGE" )                         # ends with its viewer; the app removes it
     else
         ARGS+=( --restart unless-stopped -d "$IMAGE" )   # so the desktop "Reboot container" restarts it
     fi
     docker "${ARGS[@]}"
-    echo "Container '${NAME}' started. Console: ${URL}"
+    echo "Container '${NAME}' started. Console: ${URL} (VNC: localhost:${VNC})"
     echo "console-port: ${PORT}"                     # for the app
 else
     ARGS+=( --rm -it "$IMAGE" )
-    echo "Console: ${URL}"
+    echo "Console: ${URL} (VNC: localhost:${VNC})"
     ( sleep 3; command -v open >/dev/null && open "$URL" || true ) &
     exec "$CLI" "${ARGS[@]}"
 fi

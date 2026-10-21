@@ -19,6 +19,10 @@ import java.net.ServerSocket;
  * - iKVMLunchar: StunnelUtility.checkOS (its first call: the start), Runtime.exec (the viewer);
  * - StunnelUtility: StunnelParameters.setStunnelIP and getRandomConnectPort (the local address
  *   and port stunnel will listen on), Thread.sleep, Runtime.exec (stunnel, iKVM_precheck.jar).
+ * - StunnelUtility.isPortUsed: whether stunnel's port is taken, checked on stunnel's own address.
+ *   IPMIView binds the port on all addresses, which macOS allows next to stunnel's on 127.0.0.1:
+ *   "not used", so its loop started stunnel again every 500 ms until its 4 s were up (logs: 10
+ *   more stunnels, the viewer 4.7 s later).
  * Logged: times and which program starts (its first file name only: the viewer's command line
  * has the user name and password).
  */
@@ -97,6 +101,19 @@ public final class LaunchTiming {
             Thread.sleep(50L);
         }
         Log.d("KVM launch: stunnel not listening after 4 s" + since());
+    }
+
+    /** StunnelUtility.isPortUsed: on stunnel's address (see above); can't tell: IPMIView's check. */
+    public static boolean isPortUsed(int port) {
+        Boolean taken = listening(port);
+        if (taken != null)
+            return taken;
+        try {
+            new ServerSocket(port).close();
+            return false;
+        } catch (IOException e) {
+            return true;
+        }
     }
 
     /** Whether stunnel listens on its address and port: true, false, null (can't tell). */

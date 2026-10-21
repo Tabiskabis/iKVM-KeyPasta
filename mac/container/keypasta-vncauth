@@ -1,0 +1,124 @@
+#!/usr/bin/python3
+# keypasta-vncauth [--relay] PORT TARGET: the desktop's VNC port for apps, in front of Xvnc (TARGET,
+# on the container's loopback only).
+# --relay (the desktop has a password, VNC_PASSWORD in entrypoint.sh): every byte through
+# unchanged, Xvnc asks for it.
+# Otherwise (no password; then run.sh publishes the port on the Mac's 127.0.0.1 only): two security
+# types offered, in this order: None, then VNC authentication that takes any password, empty too.
+# A client picks the first it supports from the server's list: TigerVNC Viewer takes None (no
+# question); a VNC app that wants a password gets VNC authentication and whatever it gives is
+# fine. No less safe than None. To Xvnc it's a client choosing None; after the
+# handshake every byte goes through unchanged.
+import asyncio
+import os
+import struct
+import sys
+
+NONE, VNC_AUTH = 1, 2
+
+
+async def pipe(r, w):
+    try:
+        while True:
+            data = await r.read(65536)
+            if not data:
+                break
+            w.write(data)
+            await w.drain()
+    except (ConnectionError, OSError):
+        pass
+    finally:
+        try:
+            w.close()
+        except Exception:
+            pass
+
+
+async def server_side(target):
+    """Connect to Xvnc as an RFB 3.8 client choosing None; return its streams."""
+    sr, sw = await asyncio.open_connection("127.0.0.1", target)
+    await sr.readexactly(12)                         # "RFB 003.008\n"
+    sw.write(b"RFB 003.008\n")
+    n = (await sr.readexactly(1))[0]
+    if n == 0:
+        reason = await sr.readexactly(struct.unpack(">I", await sr.readexactly(4))[0])
+        raise ConnectionError("Xvnc refused: " + reason.decode(errors="replace"))
+    types = await sr.readexactly(n)
+    if NONE not in types:
+        raise ConnectionError("Xvnc doesn't offer None (%s)" % list(types))
+    sw.write(bytes([NONE]))
+    if struct.unpack(">I", await sr.readexactly(4))[0] != 0:
+        raise ConnectionError("Xvnc's security result: failed")
+    return sr, sw
+
+
+async def handle(cr, cw, target):
+    peer = cw.get_extra_info("peername")
+    try:
+        sr, sw = await server_side(target)
+    except Exception as e:
+        print("vncauth: %s: no desktop: %s" % (peer, e), flush=True)
+        cw.close()
+        return
+    try:
+        cw.write(b"RFB 003.008\n")
+        await cw.drain()
+        version = await cr.readexactly(12)          # 3.3, 3.7, 3.8 (Screen Sharing: 3.8 then)
+        try:
+            minor = int(version[8:11])
+        except ValueError:
+            minor = 8
+        chosen = NONE
+        if minor < 7:                                 # 3.3: the server decides
+            cw.write(struct.pack(">I", NONE))
+        else:
+            cw.write(bytes([2, NONE, VNC_AUTH]))
+            await cw.drain()
+            chosen = (await cr.readexactly(1))[0]
+            if chosen == VNC_AUTH:
+                cw.write(os.urandom(16))              # the challenge; any answer is right
+                await cw.drain()
+                await cr.readexactly(16)
+                cw.write(struct.pack(">I", 0))
+            elif chosen == NONE:
+                if minor >= 8:
+                    cw.write(struct.pack(">I", 0))
+            else:
+                raise ConnectionError("client chose security type %d" % chosen)
+        await cw.drain()
+        print("vncauth: %s connected (RFB 3.%d, %s)"
+              % (peer, minor, "any password" if chosen == VNC_AUTH else "no password"), flush=True)
+    except Exception as e:
+        print("vncauth: %s: handshake failed: %s" % (peer, e), flush=True)
+        cw.close()
+        sw.close()
+        return
+    await asyncio.gather(pipe(cr, sw), pipe(sr, cw))
+
+
+async def relay(cr, cw, target):
+    try:
+        sr, sw = await asyncio.open_connection("127.0.0.1", target)
+    except OSError as e:
+        print("vncauth: no desktop: %s" % e, flush=True)
+        cw.close()
+        return
+    await asyncio.gather(pipe(cr, sw), pipe(sr, cw))
+
+
+async def main(args):
+    relaying = args[0] == "--relay"
+    if relaying:
+        args = args[1:]
+    port, target = int(args[0]), int(args[1])
+    serve = relay if relaying else handle
+    server = await asyncio.start_server(lambda r, w: serve(r, w, target), "0.0.0.0", port)
+    async with server:
+        await server.serve_forever()
+
+
+if __name__ == "__main__":
+    a = sys.argv[1:]
+    if len(a) not in (2, 3) or (len(a) == 3 and a[0] != "--relay"):
+        sys.exit("usage: keypasta-vncauth [--relay] PORT TARGET")
+    asyncio.run(main(a))

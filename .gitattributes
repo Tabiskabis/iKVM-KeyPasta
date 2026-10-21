@@ -1,8 +1,36 @@
-*.ahk text eol=crlf diff
-*.ico binary
-*.js text
-*.md text
-*.txt text
-*.java text
-*.cmd text eol=crlf
-*.sh text eol=lf
+# Line endings: text files are stored with LF; the working tree gets the platform's ending,
+# except where a file only works with one (below). Anything not listed: git decides.
+* text=auto
+
+# Windows: cmd's labels/goto and AutoHotkey want CRLF
+*.ahk                       text eol=crlf diff
+*.cmd                       text eol=crlf
+
+# Run on Linux/macOS (also copied into the container from a Windows checkout): a CR breaks
+# the shebang and the shell
+*.sh                        text eol=lf diff=bash
+*.desktop                   text eol=lf
+mac/container/Dockerfile    text eol=lf
+mac/container/bmc-check     text eol=lf diff=python
+mac/container/keypasta-*    text eol=lf diff=python
+mac/container/unpack-deb    text eol=lf diff=python
+
+# Source and docs
+*.java                      text diff=java
+*.swift                     text
+*.c                         text diff=cpp
+*.js                        text
+*.json                      text
+*.md                        text diff=markdown
+*.txt                       text
+*.svg                       text
+.gitattributes              text
+.gitignore                  text
+
+# Binary
+*.png                       binary
+*.ico                       binary
+*.icns                      binary
+*.jar                       binary
+*.class                     binary
+*.exe                       binary

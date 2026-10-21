@@ -1,5 +1,6 @@
 {
     "description": "iKVM-KeyPasta: Swap alt and cmd in Java iKVM Viewer",
+    "enabled": false,
     "manipulators": [
         {
             "conditions": [

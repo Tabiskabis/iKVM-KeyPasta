@@ -304,7 +304,7 @@ final class KeyFix implements KeyEventDispatcher {
         }
     }
 
-    /** The BMC of a viewer window: the [host] in its title ("Java iKVM Viewer v1.69.41 [10.0.0.1] ..."). */
+    /** The BMC of a viewer window: the [host] in its title ("Java iKVM Viewer v1.69.41 [192.0.2.1] ..."). */
     static String bmcOf(Component c) {
         Window w = c instanceof Window ? (Window) c : c == null ? null : javax.swing.SwingUtilities.getWindowAncestor(c);
         for (; w != null; w = w.getOwner())
@@ -351,6 +351,8 @@ final class KeyFix implements KeyEventDispatcher {
             return retarget(e);
         Component c = e.getComponent();
         viewer = c;
+        if (e.getID() == KeyEvent.KEY_PRESSED)
+            config.useBmc(bmcOf(c));                // the host's own settings (read once per host)
         if (e.getID() == KeyEvent.KEY_TYPED)
             return paste.busy();
         if (paste.handle(e))
@@ -397,8 +399,6 @@ final class KeyFix implements KeyEventDispatcher {
         boolean cmdKey = os == Os.MAC && e.getKeyCode() == KeyEvent.VK_META;     // as pressed, before the swap
         if (os == Os.LINUX)
             linuxLocation(e);
-        if (e.getID() == KeyEvent.KEY_PRESSED && isAltOrCmd(e.getKeyCode()))
-            config.useBmc(bmcOf(c));                // the BMC's own swap setting (cached per BMC)
         int keyCode = positionalKeyCode(e);
         if (os == Os.MAC && isModifier(e.getKeyCode()) && loggedModifiers.add(e.getKeyCode() * 10 + e.getKeyLocation()))
             Log.d("modifier " + KeyEvent.getKeyText(e.getKeyCode()) + " (" + e.getKeyCode() + ", location "
@@ -648,8 +648,8 @@ final class KeyFix implements KeyEventDispatcher {
      * set the lock state (macOS, Linux), it does nothing.
      */
     void windowFocus(WindowEvent e) {
-        if (!config.enableKeyFix || os != Os.WINDOWS)
-            return;                                 // only Windows' Java can set the lock state
+        if (!config.enableKeyFix || os != Os.WINDOWS || config.simpleCaps)
+            return;                                 // only Windows' Java can set the lock state; Simplify Caps Lock: no syncing
         final Window viewerWindow = viewerOf(e.getWindow());
         if (viewerWindow == null)
             return;

@@ -2,8 +2,14 @@
 # iKVM-KeyPasta, Linux: IPMIView and iKVM Viewer (.jnlp files) in the desktop's app menu, and the
 # command ipmiview, all with the Java agent.
 #
-#   bash install.sh [--user|--system] [IPMIView folder]    install or update
-#   bash install.sh --uninstall                            remove it again (both kinds)
+#   bash install.sh [--user|--system] [IPMIView folder or .tar.gz]   install or update
+#   bash install.sh --uninstall                                      remove it again (both kinds)
+#
+# IPMIView: the folder or downloaded .tar.gz given; else an IPMIView already there (the one the
+# last install used, else the newest in ~, ~/.local/bin, ~/Applications, /opt, /usr/local); else
+# the newest IPMIView_*_Linux_x64.tar.gz in the current folder. A .tar.gz is unpacked into your
+# home folder (--system: /opt), unless its folder is there already; the settings files (BMC list,
+# saved logins) of the IPMIView the last install used are copied into a new one.
 #
 # Where it goes follows IPMIView:
 #   in your home folder (or --user): for you only, no root needed
@@ -88,14 +94,76 @@ for arg in "$@"; do
     esac
 done
 
-# IPMIView's folder: the argument, else the first found where the starter looks too
-if [ -z "$IPMIVIEW" ]; then
-    for d in "$HOME"/IPMIView* "$HOME"/.local/bin/IPMIView* "$HOME"/Applications/IPMIView* /opt/IPMIView* /usr/local/IPMIView*; do
-        [ -f "$d/IPMIView20.jar" ] && { IPMIVIEW="$d"; break; }
-    done
+DOWNLOAD=https://www.supermicro.com/Bios/sw_download/1176/IPMIView_2.25.0_build.260812_bundleJRE_Linux_x64.tar.gz
+EXAMPLE=IPMIView_2.25.0_build.260812_bundleJRE_Linux_x64.tar.gz
+
+# The IPMIView folder the last install used (either kind), if it's still there
+PREVIOUS=""
+for note in "${XDG_DATA_HOME:-$HOME/.local/share}/iKVM-KeyPasta/ipmiview-folder" /opt/iKVM-KeyPasta/ipmiview-folder; do
+    [ -f "$note" ] || continue
+    d="$(cat "$note")"
+    [ -f "$d/IPMIView20.jar" ] && { PREVIOUS="$d"; break; }
+done
+
+# The newest of the given paths (by the version in their names)
+newest() {
+    [ $# -gt 0 ] || return 0
+    printf '%s\n' "$@" | sort -V | tail -n 1
+}
+
+# IPMIView: the argument; else one installed; else the newest download in the current folder
+TARBALL=""
+if [ -n "$IPMIVIEW" ] && [ -f "$IPMIVIEW" ]; then
+    TARBALL="$IPMIVIEW"
+    IPMIVIEW=""
+elif [ -z "$IPMIVIEW" ]; then
+    IPMIVIEW="$PREVIOUS"
+    if [ -z "$IPMIVIEW" ]; then
+        found=()
+        for d in "$HOME"/IPMIView* "$HOME"/.local/bin/IPMIView* "$HOME"/Applications/IPMIView* /opt/IPMIView* /usr/local/IPMIView*; do
+            [ -f "$d/IPMIView20.jar" ] && found+=("$d")
+        done
+        IPMIVIEW="$(newest "${found[@]}")"
+    fi
+    if [ -z "$IPMIVIEW" ]; then
+        found=()
+        for f in IPMIView*_Linux_x64.tar.gz; do
+            [ -f "$f" ] && found+=("$PWD/$f")
+        done
+        TARBALL="$(newest "${found[@]}")"
+        [ -n "$TARBALL" ] || fail "IPMIView not found: neither installed nor its download in this folder.
+Download it ($DOWNLOAD)
+and run this again with it, e.g.: bash $0 ~/Downloads/$EXAMPLE"
+    fi
+fi
+
+# A download: unpacked into the home folder (--system: /opt), unless it's there already
+if [ -n "$TARBALL" ]; then
+    case "$TARBALL" in
+        *.tar.gz|*.tgz) ;;
+        *) fail "$TARBALL isn't an IPMIView download (.tar.gz) or folder. E.g.: bash $0 ~/Downloads/$EXAMPLE" ;;
+    esac
+    TOP="$(tar -tzf "$TARBALL" | head -n 1 | cut -d/ -f1)"
+    [ -n "$TOP" ] && [ "$TOP" != . ] || fail "$TARBALL: no IPMIView folder in it."
+    if [ "$KIND" = system ]; then PARENT=/opt; UNPACK=asroot; else PARENT="$HOME"; UNPACK=""; fi
+    IPMIVIEW="$PARENT/$TOP"
+    if [ -f "$IPMIVIEW/IPMIView20.jar" ]; then
+        echo "IPMIView from $TARBALL is in $IPMIVIEW already."
+    else
+        echo "Unpacking $TARBALL into $PARENT"
+        $UNPACK tar -xzf "$TARBALL" -C "$PARENT"
+        [ -f "$IPMIVIEW/IPMIView20.jar" ] || fail "$TARBALL: no IPMIView20.jar in $IPMIVIEW."
+        # the settings of the IPMIView used so far (its BMC list, saved logins and the like)
+        if [ -n "$PREVIOUS" ] && [ "$PREVIOUS" != "$IPMIVIEW" ]; then
+            for f in "$PREVIOUS"/*.properties; do
+                [ -f "$f" ] && $UNPACK cp -p "$f" "$IPMIVIEW/"
+            done
+            echo "Settings copied from $PREVIOUS."
+        fi
+    fi
 fi
 [ -n "$IPMIVIEW" ] && [ -f "$IPMIVIEW/IPMIView20.jar" ] \
-    || fail "IPMIView not found${IPMIVIEW:+ in $IPMIVIEW}. Run: bash install.sh <IPMIView folder>"
+    || fail "IPMIView not found${IPMIVIEW:+ in $IPMIVIEW}. Run: bash $0 <IPMIView folder or download>, e.g. bash $0 ~/Downloads/$EXAMPLE"
 IPMIVIEW="$(cd "$IPMIVIEW" && pwd)"
 case "$IPMIVIEW" in
     *[\"\`\$\\]*) fail "Please use an IPMIView folder without \" \` \$ \\ in its path." ;;

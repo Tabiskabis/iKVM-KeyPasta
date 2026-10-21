@@ -2,17 +2,44 @@
 
 Makes the keyboard work properly in the Supermicro/ATEN iKVM remote console (Java app and HTML5 browser viewer). Regardless of local or remote keyboard layout, keypresses arrive as typed on your physical keyboard, even dead keys and AltGr. Adds pasting from the local clipboard with `Alt+Shift+V` (macOS: `⌥⇧V` or `⇧⌘V` in the Java viewer, `⇧⌘V` in the browser).
 
-Mix and match any of the three parts:
 
-- **`iKVM-KeyPasta.ahk`** (AutoHotkey v2, Windows only): simple and well tested script for both viewers, but less well integrated. Keystrokes may come out imperfect. AHK needs admin rights to install. The script runs with UI Access through the AutoHotkey installation instead of as admin. Also adds Ctrl+Alt+Del to the remote, Alt+Tab in the Java app, and the paste shortcut works in other programs than iKVM, too.
+## Components
 
-- **`iKVM-KeyPasta.user.js`** (userscript for the HTML5 viewer): fixes the problems at their source, inside the viewer. Any browser with Tampermonkey or Violentmonkey, any system. No admin rights needed.
+### Core
 
-- **`iKVM-KeyPasta-agent.jar`** (Java agent for IPMIView and .jnlp files): fixes the problems at their source, inside the viewer. Windows, Linux and macOS. Needs admin rights to install. It also fixes a list of annoyances in IPMIView itself: faster console launch and first login, no password file in the temp folder, saved passwords shown and used for firmware updates, readable fonts on Linux and macOS, and more (see [DOCUMENTATION.md](DOCUMENTATION.md#7-the-java-agent-fixes-in-ipmiview)).
+- **`iKVM-KeyPasta-agent.jar`** Java agent for IPMIView and .jnlp files: fixes the problems at their source, inside the iKVM viewer and IPMIView itself (details in [DOCUMENTATION.md](DOCUMENTATION.md#7-the-java-agent-fixes-in-ipmiview)).
 
-Extra: **`login-fix.user.js`** (userscript for the BMC's login page, any browser and system): makes the login form fillable by password managers again (autocomplete attributes, a real password field, focus on the user name). It matches BMCs addressed by IP address (IPv4, IPv6, `*.ipv6-literal.net`); for host names, add them in the extension's script settings. Installed like the other userscript.
+- **`iKVM-KeyPasta.user.js`** userscript for the HTML5 viewer: fixes the problems at their source, inside the HTML viewer. Any browser with Tampermonkey or Violentmonkey, any system. No admin rights needed.
 
-Where the agent or the userscript is active, the AHK script leaves that viewer alone and only adds Ctrl+Alt+Del via Ctrl+Alt+End (mimicking RDP) and Alt+Tab (Java app).
+Extra: **`login-fix.user.js`** userscript for the BMC's login page: makes the BMC Web's login form fillable by password managers.
+
+### Windows
+
+- **`iKVM-KeyPasta.ahk`** AutoHotkey v2 script that tries to fix keyboard layout issues in iKVM viewer, and enables windows clipboard paste on the remote. The project originated from this only, hence the name, Key+Pasta. Simple and well tested, but less well integrated. Keystrokes may come out imperfect. AHK needs admin rights to install. The script runs with UI Access through the AutoHotkey installation instead of as admin. Also adds Ctrl+Alt+Del to the remote, Alt+Tab in the Java app, and the paste shortcut works in other programs than iKVM, too.  
+
+- **`iKVM-IPMIView-launcher.cmd`** Batch script that loads the Java agent into IPMIView and iKVM viewers spawning from it. Tries to start with admin elevation (unless started with `/noadmin`), so viewers don't request elevation again, and to have write access for the admin-protected `.properties` files. If the user's `%AppData%\IPMIView` directory exists, it also advises IPMIView to store its configuration there (instead of the default `%ProgramFiles%\SUPERMICRO\IPMIView`, where only admins can write to but is readable by all users).  
+
+- **`iKVM-jnlp-launcher.cmd`** Launcher for .jnlp files downloaded from the BMC. Loads the Java agent into the iKVM viewer. Double function to literally "Open with" .jnlp files.  
+  This launcher requests admin elevation before OpenWebStart downloads the iKVM application from the BMC, which is the only way to run some older versions of the viewer, while newer ones would otherwise request elevation and then start over. This approach is also the safest way to pass the agent to an elevated javaws environment.  
+
+Mix and match any of the core components and the windows specific parts to your liking. Where the agent or the userscript is active, the AHK script leaves that viewer alone and only adds Ctrl+Alt+Del via Ctrl+Alt+End (mimicking RDP) and Alt+Tab (Java app).
+
+### Mac app
+
+The iKVM-KeyPasta app is a launcher for IPMIView, including Java iKVM remote, and jnlp files from the BMC's WebUI. Both originally unsupported on macOS. Includes the Java agent.  
+For Apple silicon Macs up to macOS 27 and Intel-based Macs, all components work more or less natively thanks to Rosetta. Only x86-64 Java 8 or 11 is required.  
+Alternatively, the launcher builds virtualized x86-64 containers to run the Java apps. They can be used with a VNC client or a Browser.  
+
+### Linux
+
+Command line and desktop launchers for IPMIView and .jnlp files, loading the Java agent in the applications.  
+
+
+## Scope
+
+The goal is to keep the stack lean and as close to the host OS and Supermicro's tools as possible: it fixes bugs in IPMIView, the iKVM viewer and the HTML5 viewer where they run, rather than replacing them. If you want a containerized IPMI management solution (also suitable for other IPMI manufacturers) instead, have a look at [ipmi-bmc-toolkit](https://github.com/dillonbrowne/ipmi-bmc-toolkit).
+
+For iKVM to work with current BMC firmware, IPMIView 2.25 or newer is required: [IPMIView_2.25.0_build.260812_bundleJRE_Linux_x64.tar.gz](https://www.supermicro.com/Bios/sw_download/1176/IPMIView_2.25.0_build.260812_bundleJRE_Linux_x64.tar.gz), [IPMIView_2.25.0_build.260812_Windows.zip](https://www.supermicro.com/Bios/sw_download/1173/IPMIView_2.25.0_build.260812_Windows.zip).
 
 
 ## Quick install
@@ -20,9 +47,9 @@ Where the agent or the userscript is active, the AHK script leaves that viewer a
 **Windows:** run `windows\install.cmd` (requires admin elevation). It copies the available files to `%ProgramFiles%\iKVM-KeyPasta\`, registers the jnlp launcher, puts the AHK in autostart and starts it. It also creates a new shortcut in the Start menu that starts IPMIView with the Java agent as administrator.
 It asks to install AutoHotkey v2 and OpenWebStart, but does not import the userscript to your browser. Associating .jnlp files with the jnlp launcher also is a manual task (see below).
 
-**Linux:** run `bash linux/install.sh`, optionally with IPMIView's folder (`bash linux/install.sh ~/IPMIView_2.25.0_build.260709_bundleJRE_Linux_x64`). It puts IPMIView and iKVM Viewer, both with the agent, into your desktop's app menu: just for you if IPMIView is in your home folder, else for all users (asks for sudo; `--user` or `--system` to choose). iKVM Viewer opens .jnlp files with OpenWebStart (install that first, see below); without a file it opens the launch.jnlp in your Downloads folder. With IPMIView installed for all users, everyone's BMC list and logins are kept in their own `~/.config/ipmiview`. From a terminal, `ipmiview` starts IPMIView; `--debug` shows the agent's log there (`ipmiview --debug`, `/opt/iKVM-KeyPasta/jnlp-keypasta.sh --debug file.jnlp`). `bash linux/install.sh --uninstall` removes it all again.
+**Linux:** run `bash linux/install.sh`, optionally with IPMIView's folder or its .tar.gz download. It puts IPMIView and iKVM Viewer, both with the agent, into your desktop's app menu: just for you if IPMIView is in your home folder, else for all users (asks for sudo; `--user` or `--system` to choose). iKVM Viewer opens .jnlp files with OpenWebStart (install that first, see below); without a file it opens the launch.jnlp in your Downloads folder. With IPMIView installed for all users, everyone's BMC list and logins are kept in their own `~/.config/ipmiview`. From a terminal, `ipmiview` starts IPMIView; `--debug` shows the agent's log there (`ipmiview --debug`, `/opt/iKVM-KeyPasta/jnlp-keypasta.sh --debug file.jnlp`). `bash linux/install.sh --uninstall` removes it all again.
 
-**macOS:** the Mac app runs IPMIView and .jnlp files with the agent, see [mac/README.md](mac/README.md).
+**macOS:** the Mac app runs IPMIView and .jnlp files with the agent, see [mac/README.md](mac/README.md). From macOS 28 on only possible in a container, which needs considerably more resources and a Docker compatible container manager.
 
 
 ## Manual installation
@@ -118,9 +145,9 @@ Type as usual. Everything only acts in iKVM windows:
 - Java app: windows titled `Java iKVM Viewer [...]` or `Java iKVM Viewer v1.69.44 [...]` (with the agent active, the title ends with ⌨)
 - HTML5 viewer: tabs titled `Resolution:... FPS :...` (with the userscript active, the title ends with ⌨)
 
-**Paste** types the clipboard into the remote: `Alt+Shift+V`, on macOS `⌥⇧V` or `⇧⌘V` in the Java viewer and `⇧⌘V` in the browser.
+**Paste** types the clipboard into the remote: `Alt+Shift+V`, on macOS `⌥⇧V` or `⇧⌘V` in the Java viewer and `⇧⌘V` in the browser. Another hotkey can be set in the Java viewer's Options › KeyPasta Preferences and in the userscript's settings, a default and per BMC.
 
-- It types for the remote's keyboard layout: Swiss German, Swiss French, German or United States. By default the first of these among your local layouts, else Swiss German. Set it in the AutoHotkey tray menu ("Remote layout"), in the Java viewer's Options › KeyPasta Agent, or in the userscript's settings. All three keep it per BMC.
+- It types for the remote's keyboard layout: Swiss German, Swiss French, German or United States. By default the first of these among your local layouts, else Swiss German. Set it in the AutoHotkey tray menu ("Remote layout"), in the Java viewer's Options › KeyPasta Preferences, or in the userscript's settings. All three keep it per BMC.
 - Garbled result (the remote uses another layout)? Turn CapsLock on and paste again (safe paste): slower, but works with any layout, as everything is sent as alt codes. Turn CapsLock off again afterwards (it toggles on the remote, too).
 - Text with line breaks or AltGr characters, or with characters that aren't on the keyboard (typed slowly as Alt + number): you're asked first, fast paste, safe paste or cancel. Once the remote layout is set, only the latter are asked about, and that can be set ahead too.
 - Switching to another window or pressing Esc stops a running paste.
@@ -140,9 +167,17 @@ Type as usual. Everything only acts in iKVM windows:
 
 ### Advanced configuration
 
-**Agent options:** `-javaagent:...jar=name=value,name=value`: `paste=alt+shift+V` (hotkey, on macOS too), `pasteNonAscii=ask` (`always`, `never`), `remoteOs=linux` (`windows`), `remoteLayout=auto` (the default layout: `us`, `de-CH`, `fr-CH`, `de-DE`, `other` (alt codes); auto: Swiss German; the dialog's setting wins), `localLayout=auto` (macOS only: `de-CH`, `fr-CH`, `de-DE`, `us`; auto: the current input source), `keyDelay=2` (ms per key when pasting), `mouseRate=60` (mouse moves sent to the BMC per second at most, `0`: every one), `log=path` (debug log). Unknown options and values are ignored with a message on the console.
+**Agent options:** `-javaagent:...jar=name=value,name=value`: `paste=alt+shift+V` (the default hotkey, on macOS too; the dialog's setting wins), `pasteNonAscii=ask` (`always`, `never`), `remoteOs=linux` (`windows`), `remoteLayout=auto` (the default layout: `us`, `de-CH`, `fr-CH`, `de-DE`, `other` (alt codes); auto: Swiss German; the dialog's setting wins), `localLayout=auto` (macOS only: `de-CH`, `fr-CH`, `de-DE`, `us`; auto: the current input source), `keyDelay=2` (ms per key when pasting), `mouseRate=60` (mouse moves sent to the BMC per second at most, `0`: every one), `log=path` (debug log). Unknown options and values are ignored with a message on the console.
 
-**Userscript settings** (the extension's menu, "KeyPasta settings…", in the viewer's tab): the remote's keyboard layout, a default (Swiss German unless set) and this BMC's own (by host), characters not on the keyboard (ask, alt codes, leave out), the remote system for alt codes (Linux console, Windows; also in the paste dialog). Kept in the extension's storage, not in the BMC's site data. Its paste hotkey is fixed. `KEY_DELAY` (ms per keystroke when pasting) is at the top of the script.
+**Agent settings** (the viewer's Options › KeyPasta Preferences, a default and per host) are kept in a plain text file, `agent.properties`, and win over the agent options. The same file works on every platform, so it can be copied or synced between users and computers:
+
+- Windows: `%AppData%\iKVM-KeyPasta\agent.properties`
+- macOS: `~/Library/Application Support/iKVM-KeyPasta/agent.properties` (the Mac app's container uses this one, too)
+- Linux: `~/.config/iKVM-KeyPasta/agent.properties` (or under `$XDG_CONFIG_HOME`)
+
+One line per setting, `name=value` for the default, `name@host=value` for a host's own, e.g. `remoteLayout@192.0.2.5=us`. `KEYPASTA_SETTINGS_DIR` sets another folder.
+
+**Userscript settings** (the extension's menu, "KeyPasta settings…", in the viewer's tab): the remote's keyboard layout (Swiss German unless set) and the paste hotkey, each a default and this BMC's own (by host), characters not on the keyboard (ask, alt codes, leave out), the remote system for alt codes (Linux console, Windows; also in the paste dialog). Kept in the extension's storage, not in the BMC's site data. `KEY_DELAY` (ms per keystroke when pasting) is at the top of the script.
 
 **AutoHotkey settings** (top of the script): `PasteHotkey`, `ConfirmCtrlAltDel`, and the paste speeds `JavaKeyDelay`, `JavaKeyPressDuration`, `HtmlKeyDelay`.
 
@@ -174,13 +209,13 @@ Alt codes only exist on the Linux console and on Windows:
 
 What each part does, how and why (including what was tried and dropped): [DOCUMENTATION.md](DOCUMENTATION.md).
 
-**Debug mode** (AutoHotkey): `DebugMode := true` in the script records key history, executed lines and a log of the messages to the Java app, viewable from the tray menu. Never leave it on: the key history contains passwords. The agent's log: `log=` (see Advanced configuration); it never contains typed keys.
-
 
 ## Licenses
 
 ### App icons `PPCH*.ico`
 
-Back when it was handwritten without AI help, this project used to be called Swiss-Pasta, because it was limited to the Swiss keyboard layouts. One of the few parts that survived the generalisation rewrite is the icon.  
-It's based on the [logo of the Pirate Party Switzerland](https://www.piratenpartei.ch/logos-und-fotos/). Slightly modified by myself.  
-License: [CC BY 3.0 CH](https://creativecommons.org/licenses/by/3.0/ch/)
+Back when it was handwritten without AI help, this project used to be called Swiss-Pasta, because it was limited to the Swiss keyboard layouts. One of the few parts that survived the generalisation rewrite is the icon. It still fits the project, as all parts putsch original software to improve it 🏴‍☠️.  
+Based on the [logo of the Pirate Party Switzerland](https://www.piratenpartei.ch/logos-und-fotos/). License: [CC BY 3.0 CH](https://creativecommons.org/licenses/by/3.0/ch/).  
+Modifications, done by myself:  
+ * Removed the outer rings  
+ * Added the fat plus sign that roughly resembles the Swiss cross  

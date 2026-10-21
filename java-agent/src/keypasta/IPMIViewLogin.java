@@ -96,9 +96,13 @@ public final class IPMIViewLogin {
     }
 
     private static volatile long sampling;
+    /** The agent's loginTrace=true: the 20 s of IPMIView's threads in the log (off: too much). */
+    static volatile boolean trace;
 
     /** 20 s of what IPMIView's threads do (see the class comment); one at a time. */
     static void sample(final String why) {
+        if (!trace)
+            return;
         final long start = System.currentTimeMillis();
         synchronized (IPMIViewLogin.class) {
             if (start - sampling < 20000L)

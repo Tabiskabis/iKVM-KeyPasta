@@ -74,13 +74,15 @@ final class Paste {
             else
                 heldModifiers.remove(key);
         }
-        // macOS: by the physical key if known (with Cmd held, macOS gave V as C on the user's Mac)
-        int kvk = MacKeys.kvk(e);
-        boolean isPasteKey = kvk >= 0 ? Layouts.usKey(MacKeys.position(kvk)) == config.pasteKey
-            : keyCode == config.pasteKey || e.getExtendedKeyCode() == config.pasteKey;
+        boolean isPasteKey = hotkeyKey(e) == config.pasteKey
+            || (MacKeys.kvk(e) < 0 && e.getExtendedKeyCode() == config.pasteKey);
         int mods = e.getModifiersEx() & MODIFIER_MASK;
         if (Config.MAC && (mods & InputEvent.ALT_GRAPH_DOWN_MASK) != 0)
             mods &= ~InputEvent.ALT_GRAPH_DOWN_MASK;   // right Option: Alt and AltGr in Java
+        // Linux (the container): the Mac's Command comes as the Windows key (Super), for which X
+        // gives Java no modifier: held, it is Cmd/meta for the hotkey (cmd+shift+V)
+        if (!Config.MAC && windowsKeyHeld())
+            mods |= InputEvent.META_DOWN_MASK;
         boolean hotkeyMods = mods == config.pasteMods || mods == config.pasteModsAlt;
         if (id == KeyEvent.KEY_RELEASED && swallowed.remove(key))
             return true;
@@ -104,11 +106,11 @@ final class Paste {
             // modifiers held since before (the hotkey's): down on the remote, their release goes through
             return !(id == KeyEvent.KEY_RELEASED && isModifier(keyCode));
         }
-        if (id == KeyEvent.KEY_PRESSED && isPasteKey && (e.getModifiersEx() & MODIFIER_MASK) != 0
+        if (id == KeyEvent.KEY_PRESSED && isPasteKey && mods != 0
                 && (!config.enablePaste || !hotkeyMods)
                 && loggedNoHotkey < 5) {
             loggedNoHotkey++;               // (a few: tells why a paste didn't start)
-            Log.d("paste key with " + InputEvent.getModifiersExText(e.getModifiersEx() & MODIFIER_MASK)
+            Log.d("paste key with " + InputEvent.getModifiersExText(mods)
                 + ": not the paste hotkey (" + InputEvent.getModifiersExText(config.pasteMods)
                 + (config.enablePaste ? "" : ", paste turned off") + ")");
         }
@@ -117,6 +119,28 @@ final class Paste {
             pasteKeyHeld = true;
             start(e.getComponent());
             return true;
+        }
+        return false;
+    }
+
+    /**
+     * A key event's key as the hotkey sees it (also the dialog's recorder): macOS, the main block,
+     * by the physical key, its US key code (with Cmd held, macOS gave V as C on the user's Mac);
+     * else the key code, or the extended one if Java has no code for the key.
+     */
+    static int hotkeyKey(KeyEvent e) {
+        int kvk = MacKeys.kvk(e);
+        int us = kvk >= 0 ? Layouts.usKey(MacKeys.position(kvk)) : -1;
+        if (us >= 0)
+            return us;
+        return e.getKeyCode() != KeyEvent.VK_UNDEFINED ? e.getKeyCode() : e.getExtendedKeyCode();
+    }
+
+    private boolean windowsKeyHeld() {
+        synchronized (heldModifiers) {
+            for (int k : heldModifiers)
+                if (k / 10 == KeyEvent.VK_WINDOWS)
+                    return true;
         }
         return false;
     }
@@ -262,7 +286,7 @@ final class Paste {
                 msg.append("• Includes line breaks or AltGr characters (@ # | { } …): if the remote system ")
                     .append("doesn't use the ").append(Layouts.name(fix.remoteLayout()))
                     .append(" layout, garbled commands could run. Safe paste works with any ")
-                    .append("layout, but is slower. (Options, KeyPasta Agent: say this BMC's layout, ")
+                    .append("layout, but is slower. (Options, KeyPasta Preferences: say this BMC's layout, ")
                     .append("and this isn't asked again.)<br><br>");
             if (askSlow) {
                 msg.append("• ").append(slow).append(slow > 1 ? " characters" : " character")

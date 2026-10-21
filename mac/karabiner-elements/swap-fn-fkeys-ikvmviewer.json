@@ -1,5 +1,6 @@
 {
     "description": "iKVM-KeyPasta: Swap fn and F-keys in Java iKVM Viewer",
+    "enabled": false,
     "manipulators": [
         {
             "conditions": [

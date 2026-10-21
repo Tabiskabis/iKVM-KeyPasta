@@ -1,14 +1,28 @@
 #!/bin/bash
 # Build "IPMIView KeyPasta.app" from IPMIViewKeyPasta.swift.
 # Needs the Xcode Command Line Tools (xcode-select --install) — no full Xcode.
+
+# The app's version: APP_VERSION, then the version of the agent jar it bundles (its manifest)
+# without its last number, which is always 0 (agent 3.0.0 -> app 1.3.0).
+APP_VERSION=1
+
 set -e
 cd "$(dirname "$0")"
 MAC="$(cd .. && pwd)"                 # the mac/ folder
 APP="IPMIView KeyPasta.app"
 EXEC="IPMIViewKeyPasta"
 ID="iKVM-KeyPasta"
-VER="$(sed -n 's/^Implementation-Version:[[:space:]]*//p' "$MAC/../java-agent/manifest.txt" 2>/dev/null | head -1)"
-[ -n "$VER" ] || VER="2.0.0"   # project version, from the agent manifest
+# The agent jar: the project's, at its top folder. Not there: built with java-agent/build.sh
+# (needs a JDK 9 or newer), if the project's java-agent folder is here.
+AGENT_JAR="$MAC/../iKVM-KeyPasta-agent.jar"
+if [ ! -f "$AGENT_JAR" ] && [ -f "$MAC/../java-agent/build.sh" ]; then
+    echo "$AGENT_JAR not found, building it."
+    sh "$MAC/../java-agent/build.sh" || echo "Building the agent jar failed." >&2
+fi
+[ -f "$AGENT_JAR" ] || { echo "ERROR: $AGENT_JAR not found. Build it with java-agent/build.sh, or copy it there." >&2; exit 1; }
+AGENT_VER="$(unzip -p "$AGENT_JAR" META-INF/MANIFEST.MF | sed -n 's/^Implementation-Version:[[:space:]]*//p' | head -1 | tr -d '\r')"
+[ -n "$AGENT_VER" ] || { echo "No Implementation-Version in $AGENT_JAR" >&2; exit 1; }
+VER="$APP_VERSION.${AGENT_VER%.*}"
 
 command -v swiftc >/dev/null || { echo "swiftc not found. Run: xcode-select --install" >&2; exit 1; }
 command -v clang >/dev/null || { echo "clang not found. Run: xcode-select --install" >&2; exit 1; }
@@ -51,7 +65,7 @@ echo "Compiling…"
 swiftc -O -parse-as-library -o "$APP/Contents/MacOS/$EXEC" IPMIViewKeyPasta.swift \
     -framework SwiftUI -framework AppKit
 
-# Bundle the launcher script and the stand-in source it compiles on first run.
+# Bundle the launcher script.
 cp "$MAC/ipmiview-keypasta.sh" "$APP/Contents/Resources/ipmiview-keypasta.sh"
 chmod +x "$APP/Contents/Resources/ipmiview-keypasta.sh"
 # Dock names "IPMIView" and "iKVM Viewer" instead of "java": java-name.sh and its launcher, Intel
@@ -59,15 +73,9 @@ chmod +x "$APP/Contents/Resources/ipmiview-keypasta.sh"
 cp "$MAC/java-name.sh" "$APP/Contents/Resources/java-name.sh"
 chmod +x "$APP/Contents/Resources/java-name.sh"
 clang -arch x86_64 -O2 -Wall -o "$APP/Contents/Resources/java-launcher" java-launcher.c -lobjc
-cp -R "$MAC/patch" "$APP/Contents/Resources/patch"
 cp -R "$MAC/container" "$APP/Contents/Resources/container"
 chmod +x "$APP/Contents/Resources/container/run.sh" "$APP/Contents/Resources/container/entrypoint.sh"
-# Bundle the agent jar: the project's, at its top folder (java-agent/build.sh puts it there).
-AGENT_JAR="$MAC/../iKVM-KeyPasta-agent.jar"
-if [ ! -f "$AGENT_JAR" ]; then
-    echo "ERROR: $AGENT_JAR not found. Build it with java-agent/build.sh." >&2
-    exit 1
-fi
+# Bundle the agent jar (found above)
 cp "$AGENT_JAR" "$APP/Contents/Resources/iKVM-KeyPasta-agent.jar"
 echo "Bundled agent: $AGENT_JAR"
 

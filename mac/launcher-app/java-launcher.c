@@ -63,6 +63,51 @@ void Java_keypasta_MacMenuBar_redraw0(void *env, void *cls) {
     dispatch_async_f(dispatch_get_main_queue(), NULL, redrawMenuBar);
 }
 
+// The viewer's menus without Cmd+Q: macOS's menus take a key equivalent before the window gets the
+// key, so Cmd+Q quit the viewer instead of reaching the remote (as Win+Q, or Alt+Q with Alt and
+// Command swapped). Every item with exactly Cmd+Q (the app menu's Quit) loses its shortcut;
+// clicking it still quits.
+static void removeQuitShortcut(void *unused) {
+    (void) unused;
+    Class appClass = objc_getClass("NSApplication");
+    Class strClass = objc_getClass("NSString");
+    if (appClass == NULL || strClass == NULL)
+        return;
+    id app = ((id (*)(id, SEL)) objc_msgSend)((id) appClass, sel_registerName("sharedApplication"));
+    id menu = ((id (*)(id, SEL)) objc_msgSend)(app, sel_registerName("mainMenu"));
+    if (menu == NULL)
+        return;
+    SEL count = sel_registerName("numberOfItems"), at = sel_registerName("itemAtIndex:");
+    SEL utf8 = sel_registerName("stringWithUTF8String:");
+    id q = ((id (*)(id, SEL, const char *)) objc_msgSend)((id) strClass, utf8, "q");
+    id none = ((id (*)(id, SEL, const char *)) objc_msgSend)((id) strClass, utf8, "");
+    long n = ((long (*)(id, SEL)) objc_msgSend)(menu, count);
+    for (long i = 0; i < n; i++) {
+        id item = ((id (*)(id, SEL, long)) objc_msgSend)(menu, at, i);
+        id sub = ((id (*)(id, SEL)) objc_msgSend)(item, sel_registerName("submenu"));
+        if (sub == NULL)
+            continue;
+        long m = ((long (*)(id, SEL)) objc_msgSend)(sub, count);
+        for (long j = 0; j < m; j++) {
+            id it = ((id (*)(id, SEL, long)) objc_msgSend)(sub, at, j);
+            id key = ((id (*)(id, SEL)) objc_msgSend)(it, sel_registerName("keyEquivalent"));
+            unsigned long mask = ((unsigned long (*)(id, SEL)) objc_msgSend)(it, sel_registerName("keyEquivalentModifierMask"));
+            if (key == NULL || (mask & 0xffff0000UL) != (1UL << 20))     // device-independent flags: Command only
+                continue;
+            if (((signed char (*)(id, SEL, id)) objc_msgSend)(key, sel_registerName("isEqualToString:"), q))
+                ((void (*)(id, SEL, id)) objc_msgSend)(it, sel_registerName("setKeyEquivalent:"), none);
+        }
+    }
+}
+
+// keypasta.MacMenuBar.noQuitShortcut0()
+__attribute__((visibility("default"), used))
+void Java_keypasta_MacMenuBar_noQuitShortcut0(void *env, void *cls) {
+    (void) env;
+    (void) cls;
+    dispatch_async_f(dispatch_get_main_queue(), NULL, removeQuitShortcut);
+}
+
 int main(int argc, char **argv) {
     const char *home = getenv("KEYPASTA_JAVA_HOME");
     if (home == NULL || *home == '\0') {

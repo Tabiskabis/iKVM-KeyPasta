@@ -49,23 +49,15 @@ final class ViewerWatch {
     }
 
     private static Field modalBlocker, peerField, peerBlocker, skipNextFocusChange;
+    private static boolean quitShortcutGone;
     private static final Map<Window, String> lastState = new WeakHashMap<Window, String>();
 
     private ViewerWatch() {
     }
 
     static void install(final boolean mac) {
-        if (mac) {
-            try {
-                modalBlocker = Window.class.getDeclaredField("modalBlocker");
-                modalBlocker.setAccessible(true);
-                peerField = Component.class.getDeclaredField("peer");
-                peerField.setAccessible(true);
-            } catch (Throwable t) {
-                Log.d("viewer watch: no modal state: " + t);
-                modalBlocker = null;
-            }
-        }
+        if (mac)
+            macFields();
         javax.swing.Timer t = new javax.swing.Timer(500, new java.awt.event.ActionListener() {
             @Override
             public void actionPerformed(java.awt.event.ActionEvent e) {
@@ -75,6 +67,10 @@ final class ViewerWatch {
                         if (!w.isShowing() || !KeyFix.isViewerWindow(w))
                             continue;
                         timing(w);
+                        if (mac && !quitShortcutGone) {
+                            quitShortcutGone = true;
+                            MacMenuBar.noQuitShortcut();
+                        }
                         if (TAB) {
                             keepMaximized(w);
                         } else {
@@ -84,7 +80,7 @@ final class ViewerWatch {
                         if (modalBlocker != null)
                             modalState(w);
                         if (mac)
-                            focusWhenNoneIs(w);
+                            focusWhenNoneIs(w, "viewer");
                     } catch (Throwable ex) {
                         Log.d("viewer watch failed: " + ex);
                     }
@@ -147,6 +143,53 @@ final class ViewerWatch {
             Log.d("viewer window state: " + state);
     }
 
+    private static void macFields() {
+        try {
+            modalBlocker = Window.class.getDeclaredField("modalBlocker");
+            modalBlocker.setAccessible(true);
+            peerField = Component.class.getDeclaredField("peer");
+            peerField.setAccessible(true);
+        } catch (Throwable t) {
+            Log.d("viewer watch: no modal state: " + t);
+            modalBlocker = null;
+        }
+    }
+
+    private static boolean ipmiviewStarted;
+
+    /**
+     * macOS, IPMIView's own process: its menus were missing from the Mac menu bar after it started
+     * (the app menu only), as the viewer's after its launch. The viewer's remedy for its main
+     * window (a showing frame with a menu bar, not a viewer's): focusWhenNoneIs every 500 ms, and
+     * the first time it has the focus after the start, its menus rebuilt and the menu bar redrawn
+     * (afterFocusBack), also when the focus came by itself. Event dispatch thread.
+     */
+    static void installIpmiview() {
+        macFields();
+        javax.swing.Timer t = new javax.swing.Timer(500, new java.awt.event.ActionListener() {
+            @Override
+            public void actionPerformed(java.awt.event.ActionEvent e) {
+                for (Window w : Window.getWindows()) {
+                    try {
+                        if (!w.isShowing() || !(w instanceof java.awt.Frame) || KeyFix.isViewerWindow(w)
+                            || ((java.awt.Frame) w).getMenuBar() == null)
+                            continue;
+                        if (!ipmiviewStarted && w.isFocused()) {
+                            ipmiviewStarted = true;
+                            Log.d("IPMIView focused after its start: its menus rebuilt");
+                            afterFocusBack(w, "IPMIView");
+                        } else {
+                            focusWhenNoneIs(w, "IPMIView");
+                        }
+                    } catch (Throwable ex) {
+                        Log.d("IPMIView watch failed: " + ex);
+                    }
+                }
+            }
+        });
+        t.start();
+    }
+
     /** " in <class>" when c is in another window than w (the focus owner in a dialog, say). */
     private static String inWindow(Component c, Window w) {
         Window cw = c instanceof Window ? (Window) c : javax.swing.SwingUtilities.getWindowAncestor(c);
@@ -167,7 +210,7 @@ final class ViewerWatch {
      * its menus are rebuilt and the Mac menu bar redrawn (afterFocusBack). Why it holds back or
      * what it did is logged when that changes.
      */
-    private static void focusWhenNoneIs(Window w) throws Exception {
+    private static void focusWhenNoneIs(Window w, String who) throws Exception {
         if (w.isFocused() || KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusedWindow() != null) {
             focusTries = 0;
             focusNote(null);
@@ -176,7 +219,7 @@ final class ViewerWatch {
         for (Window other : Window.getWindows())
             if (other != w && other.isShowing() && (other instanceof java.awt.Frame || other instanceof Dialog)) {
                 focusTries = 0;
-                focusNote("viewer not focused: another window is showing (" + other.getClass().getName() + ")");
+                focusNote(who + " not focused: another window is showing (" + other.getClass().getName() + ")");
                 return;
             }
         if (focusOff)
@@ -188,26 +231,29 @@ final class ViewerWatch {
             }
             if (!(Boolean) applicationActive.invoke(java.awt.Toolkit.getDefaultToolkit())) {
                 focusTries = 0;
-                focusNote("viewer not focused: its app isn't in front");
+                focusNote(who + " not focused: its app isn't in front");
                 return;
             }
         } catch (Throwable t) {
             focusOff = true;
-            Log.d("viewer focus watch off: " + t);
+            Log.d(who + " focus watch off: " + t);
             return;
         }
         Component v = KeyFix.viewerOfWindow(w);
         focusTries++;
         if (focusTries == 1) {
             (v != null ? v : w).requestFocus();
-            focusNote("viewer focused: its app was in front with no window focused (requestFocus)");
+            focusNote(who + " focused: its app was in front with no window focused (requestFocus)");
+            // its menus too, once focused: else none showed in the Mac menu bar (the viewer's menus
+            // were just changed: Exit removed, KeyPasta added, Cmd+Q taken off)
+            afterFocusBack(w, who);
         } else if (focusTries == 3) {                                 // after a second
             String key = nativeKey(w);
             if ("true".equals(key) && deliverFocus(w)) {
-                focusNote("viewer still not focused, but macOS has it as key window: activation delivered to Java");
-                afterFocusBack(w);
+                focusNote(who + " still not focused, but macOS has it as key window: activation delivered to Java");
+                afterFocusBack(w, who);
             } else {
-                focusNote("viewer still not focused (macOS has it as key window? " + key + ")");
+                focusNote(who + " still not focused (macOS has it as key window? " + key + ")");
             }
         }
     }
@@ -242,7 +288,7 @@ final class ViewerWatch {
      * (menuBarAgain: they were grey), then the Mac menu bar redrawn (MacMenuBar: macOS 27 doesn't
      * show changed menus until the pointer goes to the menu bar).
      */
-    private static void afterFocusBack(final Window w) {
+    private static void afterFocusBack(final Window w, final String who) {
         final long since = System.currentTimeMillis();
         final javax.swing.Timer t = new javax.swing.Timer(100, null);
         t.addActionListener(e -> {
@@ -250,10 +296,10 @@ final class ViewerWatch {
             if (!w.isFocused() && waited < 3000)
                 return;
             t.stop();
-            Log.d("viewer focused=" + w.isFocused() + " after " + waited + " ms (key window for macOS: " + nativeKey(w) + ")");
+            Log.d(who + " focused=" + w.isFocused() + " after " + waited + " ms (key window for macOS: " + nativeKey(w) + ")");
             if (!w.isFocused())
                 return;
-            menuBarAgain(w);
+            menuBarAgain(w, who);
             javax.swing.Timer redraw = new javax.swing.Timer(150, e2 -> MacMenuBar.redraw());
             redraw.setRepeats(false);
             redraw.start();
@@ -268,18 +314,18 @@ final class ViewerWatch {
      * the frame's AWT MenuBar) its menus are made anew, enabled, for the key window; macOS 27
      * draws them only once the menu bar is redrawn (MacMenuBar).
      */
-    private static void menuBarAgain(Window w) {
+    private static void menuBarAgain(Window w, String who) {
         if (!(w instanceof java.awt.Frame))
             return;
         java.awt.Frame f = (java.awt.Frame) w;
         java.awt.MenuBar mb = f.getMenuBar();
         if (mb == null) {
-            Log.d("viewer: no Mac menu bar to put back");
+            Log.d(who + ": no Mac menu bar to put back");
             return;
         }
         f.setMenuBar(null);
         f.setMenuBar(mb);
-        Log.d("viewer: Mac menu bar rebuilt (" + mb.getMenuCount() + " menus, focused=" + w.isFocused() + ")");
+        Log.d(who + ": Mac menu bar rebuilt (" + mb.getMenuCount() + " menus, focused=" + w.isFocused() + ")");
     }
 
     /** Whether macOS has w as its key window (CWrapper.NSWindow.isKeyWindow), or "?" if Java won't say. */

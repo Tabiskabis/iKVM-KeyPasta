@@ -15,7 +15,8 @@
 # the copy, so no OpenWebStart setting forces it on other programs). The .jnlp is moved out of
 # Downloads (the browser then saves the next one under the same name) to
 # ~/.cache/iKVM-KeyPasta/launch-<date>-<time>-<BMC>-<random>.jnlp, readable by you only (it holds
-# the console session's login data), and kept there. Other .jnlp files: OpenWebStart, unchanged.
+# the console session's login data), and kept there for a week after it was last opened (older
+# ones are deleted at each start). Other .jnlp files: OpenWebStart, unchanged.
 
 # Java version for the iKVM viewer (OpenWebStart's syntax: 1.8* = any 1.8). Empty: as the .jnlp says
 JAVAVERSION="1.8*"
@@ -43,7 +44,12 @@ for arg in "$@"; do
 done
 if [ -z "$JNLP" ]; then
     DOWNLOADS="$(xdg-user-dir DOWNLOAD 2>/dev/null)"
-    JNLP="${DOWNLOADS:-$HOME/Downloads}/launch.jnlp"
+    DOWNLOADS="${DOWNLOADS:-$HOME/Downloads}"
+    # the newest: browsers save another launch.jnlp as "launch (1).jnlp" and so on
+    JNLP="$DOWNLOADS/launch.jnlp"
+    for f in "$DOWNLOADS"/launch*.jnlp; do
+        [ -f "$f" ] && { [ ! -f "$JNLP" ] || [ "$f" -nt "$JNLP" ]; } && JNLP="$f"
+    done
 fi
 [ -f "$JNLP" ] || fail "No .jnlp file: $JNLP not found."
 
@@ -66,6 +72,9 @@ BMC="$(grep -o -i -m1 'codebase="[a-z]*://[^/"]*' "$JNLP" | sed -e 's|.*://||' -
 COPY="$COPYDIR/launch-$(date +%Y%m%d-%H%M%S)-${BMC:-unknown}-$RANDOM.jnlp"
 mv "$JNLP" "$COPY" || fail "Couldn't move $JNLP."
 chmod 600 "$COPY"
+# copies not opened for a week: deleted; this one counts as opened now
+touch "$COPY"
+find "$COPYDIR" -maxdepth 1 -type f -name 'launch-*.jnlp' -mtime +6 -delete 2>/dev/null || true
 # the Java version the .jnlp asks for (<j2se version="..."> or <java version="...">)
 if [ -n "$JAVAVERSION" ]; then
     sed -i -E "s/(<(j2se|java)[^>]*[[:space:]]version[[:space:]]*=[[:space:]]*)([\"'])[^\"']*([\"'])/\\1\\3$JAVAVERSION\\4/" "$COPY"

@@ -25,10 +25,11 @@ import javax.swing.event.PopupMenuEvent;
 import javax.swing.event.PopupMenuListener;
 
 /**
- * Adds a "KeyPasta Agent" entry, below a separator, to the iKVM viewer's "Options" menu. The dialog behind it lets the
+ * Adds "KeyPasta Preferences", below a separator, to the iKVM viewer's "Options" menu. The
+ * dialog behind it lets the
  * user turn the keyboard fixes and the paste hotkey on or off on their own, and say which layout the
  * remote uses: one of Layouts.CODES (fast paste: each character by its keys) or another one
- * (safe paste: Alt codes). Choices are stored in Config and persisted (java.util.prefs) across runs.
+ * (safe paste: Alt codes). Choices are stored in Config and persisted in its settings file (Config.file()).
  *
  * The viewer (tw.com.aten.ikvm.ui.Viewer, a JFrame) holds its Options menu in a public field
  * named "menuOption"; it is reached by reflection so the agent needs none of the viewer's
@@ -36,7 +37,7 @@ import javax.swing.event.PopupMenuListener;
  * (re)appended at the end each time the menu is about to show, which also keeps it last.
  */
 final class Menu {
-    private static final String ITEM = "KeyPasta Agent";
+    private static final String ITEM = "KeyPasta Preferences";
     /** Marks a menu we have already hooked, so a re-activated window is not hooked twice. */
     private static final String HOOKED = "keypasta.menuHooked";
 
@@ -175,154 +176,476 @@ final class Menu {
         return null;
     }
 
-    private static void showDialog(Window parent, KeyFix fix) {
+    /**
+     * A row of the dialog: a setting, its label and hint, and a dropdown of its values (how
+     * they're shown: names), or for the hotkey a field that records it from a key press.
+     */
+    private static final class Row {
+        final String key, label, hint;
+        final String[] values, names;
+        final JComboBox<String> box;        // null: the hotkey
+        final HotkeyField hot;              // the hotkey's, else null
+        final JComponent comp;              // box or hot
+        final JLabel status = new JLabel(" ");
+
+        Row(String key, String label, String hint, String[] values, String[] names) {
+            this.key = key;
+            this.label = label;
+            this.hint = hint;
+            this.values = values;
+            this.names = names;
+            this.box = new JComboBox<String>(names);
+            this.hot = null;
+            this.comp = box;
+        }
+
+        /** The hotkey's row. */
+        Row(String key, String label, String hint) {
+            this.key = key;
+            this.label = label;
+            this.hint = hint;
+            this.values = this.names = new String[0];
+            this.box = null;
+            this.hot = new HotkeyField();
+            this.comp = hot;
+        }
+
+        int index(String v) {
+            int i = java.util.Arrays.asList(values).indexOf(v);
+            return i >= 0 ? i : 0;
+        }
+
+        void show(String v) {
+            if (hot != null)
+                hot.show(v);
+            else
+                box.setSelectedIndex(index(v));
+        }
+
+        String value() {
+            return hot != null ? hot.spec : values[box.getSelectedIndex()];
+        }
+    }
+
+    /**
+     * The paste hotkey's field: shows the hotkey; a click (or Enter or Space on it) starts
+     * recording, the next key pressed with its modifiers is the hotkey; Esc cancels, as does
+     * leaving the field. Without Ctrl, Alt or Meta only a key that neither types nor edits nor
+     * moves (F1-F24, Pause, Scroll Lock, Print Screen): any other couldn't be used on the remote any
+     * more. The key as the hotkey check sees it (Paste.hotkeyKey: macOS by its place).
+     */
+    private static final class HotkeyField extends javax.swing.JTextField {
+        private static final int MODS = java.awt.event.InputEvent.CTRL_DOWN_MASK
+            | java.awt.event.InputEvent.ALT_DOWN_MASK | java.awt.event.InputEvent.SHIFT_DOWN_MASK
+            | java.awt.event.InputEvent.META_DOWN_MASK;
+        String spec = "";
+        Runnable onChange;
+        private boolean recording;
+        /** Linux (the container): the Mac's Command comes as the Windows key, which X gives no modifier. */
+        private boolean windowsKey;
+
+        HotkeyField() {
+            setEditable(false);
+            setFocusable(true);
+            setToolTipText("Click, then press the key combination (Esc: cancel)");
+            addMouseListener(new java.awt.event.MouseAdapter() {
+                @Override
+                public void mousePressed(java.awt.event.MouseEvent e) {
+                    start();
+                }
+            });
+            addFocusListener(new java.awt.event.FocusAdapter() {
+                @Override
+                public void focusLost(java.awt.event.FocusEvent e) {
+                    stop();
+                }
+            });
+            addKeyListener(new java.awt.event.KeyAdapter() {
+                @Override
+                public void keyPressed(KeyEvent e) {
+                    pressed(e);
+                }
+
+                @Override
+                public void keyReleased(KeyEvent e) {
+                    if (e.getKeyCode() == KeyEvent.VK_WINDOWS)
+                        windowsKey = false;
+                    if (recording)
+                        e.consume();
+                }
+
+                @Override
+                public void keyTyped(KeyEvent e) {
+                    if (recording)
+                        e.consume();
+                }
+            });
+        }
+
+        void show(String v) {
+            spec = v == null ? "" : v;
+            if (!recording)
+                setText(label(spec));
+        }
+
+        private void start() {
+            if (recording)
+                return;
+            recording = true;
+            setFocusTraversalKeysEnabled(false);    // Tab is a key like any other now
+            requestFocusInWindow();
+            setText("Press the keys… (Esc: cancel)");
+        }
+
+        private void stop() {
+            if (!recording)
+                return;
+            recording = false;
+            setFocusTraversalKeysEnabled(true);
+            setText(label(spec));
+        }
+
+        private void pressed(KeyEvent e) {
+            int code = e.getKeyCode();
+            if (code == KeyEvent.VK_WINDOWS)
+                windowsKey = true;
+            if (!recording) {
+                if (code == KeyEvent.VK_ENTER || code == KeyEvent.VK_SPACE) {
+                    e.consume();
+                    start();
+                }
+                return;
+            }
+            e.consume();
+            if (code == KeyEvent.VK_SHIFT || code == KeyEvent.VK_CONTROL || code == KeyEvent.VK_ALT
+                    || code == KeyEvent.VK_ALT_GRAPH || code == KeyEvent.VK_META || code == KeyEvent.VK_WINDOWS)
+                return;                             // a modifier: the key comes next
+            int mods = e.getModifiersEx() & MODS;
+            if (!Config.MAC && windowsKey)
+                mods |= java.awt.event.InputEvent.META_DOWN_MASK;
+            if (code == KeyEvent.VK_ESCAPE && mods == 0) {
+                stop();
+                return;
+            }
+            int key = Paste.hotkeyKey(e);
+            String name = Config.keyName(key);
+            boolean alone = (key >= KeyEvent.VK_F1 && key <= KeyEvent.VK_F12)
+                || (key >= KeyEvent.VK_F13 && key <= KeyEvent.VK_F24) || key == KeyEvent.VK_PAUSE
+                || key == KeyEvent.VK_SCROLL_LOCK || key == KeyEvent.VK_PRINTSCREEN;
+            if (name == null || (!alone && (mods & ~java.awt.event.InputEvent.SHIFT_DOWN_MASK) == 0)) {
+                java.awt.Toolkit.getDefaultToolkit().beep();
+                return;                             // still recording
+            }
+            spec = Config.hotkeySpec(mods, name);
+            stop();
+            if (onChange != null)
+                onChange.run();
+        }
+
+        /** "Ctrl+Alt+V", on macOS "⌃⌥V"; the spec itself if it isn't a hotkey. */
+        static String label(String spec) {
+            int[] k = Config.hotkeyKeys(spec);
+            if (k == null)
+                return spec;
+            String mods = KeyEvent.getModifiersExText(k[0]);
+            String key = KeyEvent.getKeyText(k[1]);
+            return mods.isEmpty() ? key : Config.MAC ? mods + key : mods + "+" + key;
+        }
+    }
+
+    private static final java.awt.Color OWN = new java.awt.Color(0x0a64d8);
+    private static final java.awt.Color FROM_DEFAULT = java.awt.Color.GRAY;
+
+    /**
+     * KeyPasta Preferences: every setting with a default and, for the current host (the BMC in
+     * the viewer's title), a value of its own or the default's. A switch shows one level at a
+     * time: the current host's (values taken from the default in grey italics, "From default:
+     * ...", changed ones its own, "Own value") or the defaults. "Hosts with own settings..."
+     * lists all hosts that have any, each to reset. Saved on OK (see Config).
+     */
+    private static void showDialog(Window parent, final KeyFix fix) {
         final Config config = fix.config;
         config.useBmc(KeyFix.bmcOf(parent));
-        final JCheckBox keyFix = new JCheckBox("Keyboard fixes (key positions, Ctrl, dead keys, CapsLock per window)", config.enableKeyFix);
+        final String host = config.bmc();
+        final java.util.Map<String, String> def = new java.util.HashMap<String, String>(config.defaults);
+        final java.util.Map<String, String> own = new java.util.HashMap<String, String>(config.own);
 
-        // Alt and Command swapped: a default for all BMCs, and this one's own, if it differs.
-        final JLabel swapLabel = new JLabel(Config.MAC
-            ? "Swap Option and Command (Command: the remote's Alt, Option: its Windows key):"
-            : "Swap Alt and the Windows key (Command on a Mac in the browser): Windows/Command is the remote's Alt:");
-        final JLabel swapDefaultLabel = new JLabel("Default:");
-        final JComboBox<String> swapDefault = new JComboBox<String>(new String[] {"Don't swap", "Swap"});
-        swapDefault.setSelectedIndex(config.swapDefault ? 1 : 0);
-        final JLabel swapBmcLabel = new JLabel(config.bmc() + ":");
-        final JComboBox<String> swapBmc = new JComboBox<String>(new String[] {"Same as the default", "Don't swap", "Swap"});
-        swapBmc.setSelectedIndex(config.bmcSwap == null ? 0 : config.bmcSwap ? 2 : 1);
-        JPanel swapGrid = new JPanel(new java.awt.GridBagLayout());
-        java.awt.GridBagConstraints sg = new java.awt.GridBagConstraints();
-        sg.anchor = java.awt.GridBagConstraints.WEST;
-        sg.insets = new java.awt.Insets(1, 0, 1, 6);
-        sg.gridy = 0;
-        swapGrid.add(swapDefaultLabel, sg);
-        swapGrid.add(swapDefault, sg);
-        if (!config.bmc().isEmpty()) {
-            sg.gridy = 1;
-            swapGrid.add(swapBmcLabel, sg);
-            swapGrid.add(swapBmc, sg);
-        }
-        swapGrid.setMaximumSize(swapGrid.getPreferredSize());
-        final JComponent[] swapParts = {swapLabel, swapDefaultLabel, swapDefault, swapBmcLabel, swapBmc};
-        ActionListener enableSwap = new ActionListener() {
+        String[] layoutValues = new String[Layouts.CODES.length + 1];
+        System.arraycopy(Layouts.CODES, 0, layoutValues, 0, Layouts.CODES.length);
+        layoutValues[layoutValues.length - 1] = "other";
+        String[] layoutNames = new String[Layouts.NAMES.length + 1];
+        System.arraycopy(Layouts.NAMES, 0, layoutNames, 0, Layouts.NAMES.length);
+        layoutNames[layoutNames.length - 1] = "Other: everything as Alt codes (slow)";
+        String[] onOff = {"true", "false"}, onOffNames = {"On", "Off"};
+        java.util.List<Row> rows = new java.util.ArrayList<Row>();
+        rows.add(new Row(Config.KEY_FIX, "Keyboard fixes", "Key positions, Ctrl, dead keys", onOff, onOffNames));
+        rows.add(new Row(Config.SWAP, "Swap Alt and GUI keys", "GUI is Cmd on Mac and Win on PC keyboards",
+            new String[] {"false", "true"}, new String[] {"Not swapped", "Swapped"}));
+        if (!Config.MAC)                            // macOS: always simplified
+            rows.add(new Row(Config.SIMPLE_CAPS, "Caps Lock", "Simplified: a toggle per press, no LED syncing",
+                new String[] {"false", "true"}, new String[] {"With LED syncing", "Simplified"}));
+        rows.add(new Row(Config.PASTE, "Paste", "Types the clipboard on the remote", onOff, onOffNames));
+        rows.add(new Row(Config.HOTKEY, "Paste hotkey", "Click it, then press the keys"));
+        rows.add(new Row(Config.LAYOUT, "Remote keyboard layout", "Required for faster paste operation", layoutValues, layoutNames));
+        rows.add(new Row(Config.NON_ASCII, "Characters not on the keyboard", "é, €, … when pasting",
+            new String[] {"ask", "always", "never"}, new String[] {"Ask when pasting", "Type as Alt codes (slow)", "Leave out"}));
+        rows.add(new Row(Config.REMOTE_WINDOWS, "Alt codes for", "The remote system", new String[] {"false", "true"},
+            new String[] {"Linux console", "Windows"}));
+
+        final boolean[] hostScope = {!host.isEmpty()};
+        final boolean[] filling = {false};
+        // the scope's button: Reset (current host) or Hosts with own settings (default), in one
+        // place of the size of the bigger one, so nothing moves when switching
+        final JPanel buttons = new JPanel(new java.awt.CardLayout());
+        final java.util.List<Row> all = rows;
+        final Runnable fill = new Runnable() {
             @Override
-            public void actionPerformed(ActionEvent e) {
-                for (JComponent c : swapParts)
-                    c.setEnabled(keyFix.isSelected());
+            public void run() {
+                filling[0] = true;
+                for (Row r : all) {
+                    boolean isOwn = hostScope[0] && own.containsKey(r.key);
+                    String v = isOwn ? own.get(r.key) : def.get(r.key);
+                    r.show(v);
+                    java.awt.Font f = r.comp.getFont();
+                    boolean inherited = hostScope[0] && !isOwn;
+                    r.comp.setFont(f.deriveFont(inherited ? java.awt.Font.ITALIC : java.awt.Font.PLAIN));
+                    r.comp.setForeground(inherited ? FROM_DEFAULT : isOwn ? OWN
+                        : javax.swing.UIManager.getColor(r.hot != null ? "TextField.foreground" : "ComboBox.foreground"));
+                    r.status.setText(!hostScope[0] ? " " : isOwn ? "own" : "default");
+                    r.status.setForeground(isOwn ? OWN : FROM_DEFAULT);
+                }
+                filling[0] = false;
+                ((java.awt.CardLayout) buttons.getLayout()).show(buttons, hostScope[0] ? "host" : "default");
             }
         };
-        keyFix.addActionListener(enableSwap);
-        enableSwap.actionPerformed(null);
-        final JCheckBox paste = new JCheckBox("Paste the clipboard with " + hotkey(config), config.enablePaste);
+        for (final Row r : rows) {
+            final Runnable changed = new Runnable() {
+                @Override
+                public void run() {
+                    if (filling[0])
+                        return;
+                    String v = r.value();
+                    String was = hostScope[0] && own.containsKey(r.key) ? own.get(r.key) : def.get(r.key);
+                    if (r.hot != null && v.equals(was))
+                        return;                     // the same hotkey again: stays the default's
+                    if (hostScope[0])
+                        own.put(r.key, v);          // changed: the current host's own
+                    else
+                        def.put(r.key, v);
+                    fill.run();
+                }
+            };
+            if (r.hot != null)
+                r.hot.onChange = changed;
+            else
+                r.box.addActionListener(new ActionListener() {
+                    @Override
+                    public void actionPerformed(ActionEvent e) {
+                        changed.run();
+                    }
+                });
+        }
 
-        // How the paste types: depends on the remote's keyboard layout. A default for all BMCs,
-        // and this one's own, if it differs.
-        final String otherName = "Other: everything as Alt codes (slow)";
-        final JLabel layoutLabel = new JLabel("Keyboard layout of the remote computer:");
-        final JLabel defaultLabel = new JLabel("Default:");
-        String[] names = new String[Layouts.NAMES.length + 1];
-        System.arraycopy(Layouts.NAMES, 0, names, 0, Layouts.NAMES.length);
-        names[names.length - 1] = otherName;
-        final JComboBox<String> defaults = new JComboBox<String>(names);
-        defaults.setSelectedIndex(layoutIndex(config.defaultLayout));
-        final String bmc = config.bmc();
-        final JLabel bmcLabel = new JLabel(bmc + ":");
-        String[] bmcNames = new String[names.length + 1];
-        bmcNames[0] = "Same as the default";
-        System.arraycopy(names, 0, bmcNames, 1, names.length);
-        final JComboBox<String> bmcLayouts = new JComboBox<String>(bmcNames);
-        bmcLayouts.setSelectedIndex(config.bmcLayout == null ? 0 : 1 + layoutIndex(config.bmcLayout));
-        JPanel layoutGrid = new JPanel(new java.awt.GridBagLayout());
+        JPanel panel = new JPanel(new java.awt.GridBagLayout());
         java.awt.GridBagConstraints g = new java.awt.GridBagConstraints();
-        g.anchor = java.awt.GridBagConstraints.WEST;
-        g.insets = new java.awt.Insets(1, 0, 1, 6);
+        g.gridx = 0;
         g.gridy = 0;
-        layoutGrid.add(defaultLabel, g);
-        layoutGrid.add(defaults, g);
-        if (!bmc.isEmpty()) {
-            g.gridy = 1;
-            layoutGrid.add(bmcLabel, g);
-            layoutGrid.add(bmcLayouts, g);
+        g.gridwidth = 2;
+        g.anchor = java.awt.GridBagConstraints.WEST;
+        g.insets = new java.awt.Insets(0, 0, 6, 0);
+        // plain labels, not HTML (that wrapped the host onto a line of its own)
+        JPanel hostRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
+        if (host.isEmpty()) {
+            hostRow.add(new JLabel("No current host (the viewer's title names none): the defaults"));
+        } else {
+            hostRow.add(new JLabel("Current host: "));
+            JLabel hostName = new JLabel(host);
+            hostName.setFont(hostName.getFont().deriveFont(java.awt.Font.BOLD));
+            hostRow.add(hostName);
         }
-        layoutGrid.setMaximumSize(layoutGrid.getPreferredSize());
-        final JLabel nonAsciiLabel = new JLabel("Characters that aren't on the keyboard (é, €, …):");
-        final JRadioButton ask = new JRadioButton("Ask when pasting", config.pasteNonAscii.equals("ask"));
-        final JRadioButton always = new JRadioButton("Type as Alt codes (slow)", config.pasteNonAscii.equals("always"));
-        final JRadioButton never = new JRadioButton("Leave out", config.pasteNonAscii.equals("never"));
-        ButtonGroup nonAscii = new ButtonGroup();
-        nonAscii.add(ask);
-        nonAscii.add(always);
-        nonAscii.add(never);
-        final JLabel osLabel = new JLabel("Alt codes for the remote system:");
-        final JRadioButton linux = new JRadioButton("Linux console", !config.remoteWindows);
-        final JRadioButton windows = new JRadioButton("Windows", config.remoteWindows);
-        ButtonGroup os = new ButtonGroup();
-        os.add(linux);
-        os.add(windows);
-        final JLabel capsNote = new JLabel("With CapsLock on, a paste types everything as Alt codes (safe paste).");
+        panel.add(hostRow, g);
+        final javax.swing.JToggleButton ownScope = new javax.swing.JToggleButton("Current host", hostScope[0]);
+        final javax.swing.JToggleButton defScope = new javax.swing.JToggleButton("Default", !hostScope[0]);
+        if (!host.isEmpty()) {
+            ButtonGroup scope = new ButtonGroup();
+            scope.add(ownScope);
+            scope.add(defScope);
+            ActionListener switchScope = new ActionListener() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    hostScope[0] = ownScope.isSelected();
+                    fill.run();
+                }
+            };
+            ownScope.addActionListener(switchScope);
+            defScope.addActionListener(switchScope);
+            JPanel scopeRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
+            scopeRow.add(new JLabel("Settings for  "));
+            scopeRow.add(ownScope);
+            scopeRow.add(defScope);
+            g.gridy++;
+            g.insets = new java.awt.Insets(0, 0, 10, 0);
+            panel.add(scopeRow, g);
+        }
+        g.gridwidth = 1;
+        for (Row r : rows) {
+            g.gridy++;
+            g.gridx = 0;
+            g.insets = new java.awt.Insets(4, 0, 0, 16);
+            g.anchor = java.awt.GridBagConstraints.WEST;
+            g.fill = java.awt.GridBagConstraints.NONE;
+            JPanel text = new JPanel();
+            text.setLayout(new BoxLayout(text, BoxLayout.Y_AXIS));
+            JPanel nameRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
+            nameRow.add(new JLabel(r.label));
+            nameRow.add(Box.createHorizontalStrut(6));
+            r.status.setFont(r.status.getFont().deriveFont(r.status.getFont().getSize2D() - 2f));
+            r.status.setPreferredSize(new java.awt.Dimension(60, r.status.getPreferredSize().height));
+            nameRow.add(r.status);                  // own / default (current host), fixed width
+            nameRow.setAlignmentX(0f);
+            JLabel hint = new JLabel(r.hint);
+            hint.setFont(hint.getFont().deriveFont(hint.getFont().getSize2D() - 2f));
+            hint.setForeground(FROM_DEFAULT);
+            hint.setAlignmentX(0f);
+            text.add(nameRow);
+            text.add(hint);
+            panel.add(text, g);
+            g.gridx = 1;
+            g.anchor = java.awt.GridBagConstraints.EAST;
+            g.fill = java.awt.GridBagConstraints.HORIZONTAL;
+            g.insets = new java.awt.Insets(4, 0, 0, 0);
+            panel.add(r.comp, g);
+        }
+        g.gridy++;
+        g.gridx = 0;
+        g.gridwidth = 2;
+        g.fill = java.awt.GridBagConstraints.NONE;
+        g.anchor = java.awt.GridBagConstraints.WEST;
+        g.insets = new java.awt.Insets(10, 0, 0, 0);
+        JLabel capsNote = new JLabel("With CapsLock on, a paste types everything as Alt codes (safe paste).");
         capsNote.setFont(capsNote.getFont().deriveFont(capsNote.getFont().getSize2D() - 2f));
-
-        final JComponent[] pasteParts = {layoutLabel, defaultLabel, defaults, bmcLabel, bmcLayouts, nonAsciiLabel, ask, always, never, capsNote,
-            osLabel, linux, windows};
-        ActionListener enable = new ActionListener() {
+        panel.add(capsNote, g);
+        g.gridy++;
+        final javax.swing.JButton hosts = new javax.swing.JButton("Hosts with own settings…");
+        final javax.swing.JButton reset = new javax.swing.JButton("Reset current host to default");
+        JPanel hostCard = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
+        hostCard.add(reset);
+        JPanel defaultCard = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
+        defaultCard.add(hosts);
+        buttons.add(hostCard, "host");
+        buttons.add(defaultCard, "default");
+        panel.add(buttons, g);
+        reset.addActionListener(new ActionListener() {
             @Override
             public void actionPerformed(ActionEvent e) {
-                for (JComponent c : pasteParts)
-                    c.setEnabled(paste.isSelected());
+                own.clear();
+                fill.run();
+            }
+        });
+        final JPanel dialogPanel = panel;
+        hosts.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                showHosts(dialogPanel, config, host, own, fill);
+            }
+        });
+        // every dropdown one fixed width (the widest, plain font, a bit of room for italics): the
+        // italics of values taken from the default made them wider, and the dialog's content,
+        // centered, moved when switching
+        int width = 0;
+        for (Row r : rows)
+            if (r.box != null)
+                width = Math.max(width, r.box.getPreferredSize().width);
+        for (Row r : rows) {
+            java.awt.Dimension d = new java.awt.Dimension(width + 12, r.comp.getPreferredSize().height);
+            r.comp.setPreferredSize(d);
+            r.comp.setMinimumSize(d);
+        }
+        fill.run();
+
+        int result = JOptionPane.showConfirmDialog(parent, panel, "KeyPasta Preferences",
+            JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        if (result != JOptionPane.OK_OPTION)
+            return;
+        config.defaults.clear();
+        config.defaults.putAll(def);
+        config.own.clear();
+        config.own.putAll(own);
+        config.savePrefs();
+        Log.d("settings: default " + config.defaults + (host.isEmpty() ? "" : ", " + host + " own " + config.own));
+    }
+
+    /** A host's own values in a few words: "Layout us · Caps Lock simplified". */
+    private static String summary(java.util.Map<String, String> own) {
+        StringBuilder b = new StringBuilder();
+        for (String k : Config.SETTINGS) {
+            String v = own.get(k);
+            if (v == null)
+                continue;
+            boolean on = v.equals("true");
+            String t = k.equals(Config.KEY_FIX) ? "keyboard fixes " + (on ? "on" : "off")
+                : k.equals(Config.SWAP) ? (on ? "Alt/Command swapped" : "Alt/Command not swapped")
+                : k.equals(Config.SIMPLE_CAPS) ? "Caps Lock " + (on ? "simplified" : "with LED syncing")
+                : k.equals(Config.PASTE) ? "paste " + (on ? "on" : "off")
+                : k.equals(Config.HOTKEY) ? "hotkey " + v
+                : k.equals(Config.LAYOUT) ? "layout " + v
+                : k.equals(Config.NON_ASCII) ? "non-ASCII " + v
+                : "Alt codes " + (on ? "Windows" : "Linux");
+            if (b.length() > 0)
+                b.append(" · ");
+            b.append(t);
+        }
+        return b.toString();
+    }
+
+    /** The hosts with own settings (saved ones), each with Reset: it follows the default again. */
+    private static void showHosts(java.awt.Component parent, final Config config, final String current,
+                                  final java.util.Map<String, String> currentOwn, final Runnable refill) {
+        final JPanel list = new JPanel(new java.awt.GridBagLayout());
+        final Runnable[] build = new Runnable[1];
+        build[0] = new Runnable() {
+            @Override
+            public void run() {
+                list.removeAll();
+                java.awt.GridBagConstraints g = new java.awt.GridBagConstraints();
+                g.anchor = java.awt.GridBagConstraints.WEST;
+                g.insets = new java.awt.Insets(2, 0, 2, 12);
+                g.gridy = 0;
+                java.util.List<String> hosts = Config.hostsWithOwn();
+                if (hosts.isEmpty())
+                    list.add(new JLabel("No host has settings of its own."), g);
+                for (final String h : hosts) {
+                    g.gridx = 0;
+                    list.add(new JLabel(h), g);
+                    g.gridx = 1;
+                    JLabel what = new JLabel(summary(Config.ownOf(h)));
+                    what.setForeground(FROM_DEFAULT);
+                    list.add(what, g);
+                    g.gridx = 2;
+                    javax.swing.JButton r = new javax.swing.JButton("Reset");
+                    r.addActionListener(new ActionListener() {
+                        @Override
+                        public void actionPerformed(ActionEvent e) {
+                            config.resetHost(h);
+                            if (h.equals(current)) {
+                                currentOwn.clear();
+                                refill.run();
+                            }
+                            build[0].run();
+                        }
+                    });
+                    list.add(r, g);
+                    g.gridy++;
+                }
+                list.revalidate();
+                list.repaint();
+                Window w = SwingUtilities.getWindowAncestor(list);
+                if (w != null)
+                    w.pack();
             }
         };
-        paste.addActionListener(enable);
-        enable.actionPerformed(null);
-
-        JPanel panel = new JPanel();
-        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
-        panel.add(left(keyFix));
-        JPanel keySub = new JPanel();                      // the swap, under the keyboard fixes, indented
-        keySub.setLayout(new BoxLayout(keySub, BoxLayout.Y_AXIS));
-        keySub.setBorder(javax.swing.BorderFactory.createEmptyBorder(2, 24, 0, 0));
-        keySub.add(left(swapLabel));
-        keySub.add(choices(swapGrid));
-        panel.add(left(keySub));
-        panel.add(Box.createVerticalStrut(6));
-        panel.add(left(paste));
-        JPanel sub = new JPanel();                         // the paste's details, under it, indented
-        sub.setLayout(new BoxLayout(sub, BoxLayout.Y_AXIS));
-        sub.setBorder(javax.swing.BorderFactory.createEmptyBorder(2, 24, 0, 0));
-        sub.add(left(layoutLabel));
-        sub.add(choices(layoutGrid));
-        sub.add(Box.createVerticalStrut(6));
-        sub.add(left(nonAsciiLabel));
-        sub.add(choices(ask, always, never));
-        sub.add(Box.createVerticalStrut(6));
-        sub.add(left(osLabel));
-        sub.add(choices(linux, windows));
-        sub.add(Box.createVerticalStrut(8));
-        sub.add(left(capsNote));                    // for all of the above
-        panel.add(left(sub));
-
-        int result = JOptionPane.showConfirmDialog(parent, panel, "KeyPasta",
-            JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-        if (result != JOptionPane.OK_OPTION) {
-            return;
-        }
-        config.enableKeyFix = keyFix.isSelected();
-        config.swapDefault = swapDefault.getSelectedIndex() == 1;
-        config.swapSaid = true;
-        if (!bmc.isEmpty())
-            config.bmcSwap = swapBmc.getSelectedIndex() == 0 ? null : Boolean.valueOf(swapBmc.getSelectedIndex() == 2);
-        config.enablePaste = paste.isSelected();
-        config.defaultLayout = layoutCode(defaults.getSelectedIndex());
-        config.defaultSaid = true;                  // said: fast paste no longer asks about it
-        if (!bmc.isEmpty())
-            config.bmcLayout = bmcLayouts.getSelectedIndex() == 0 ? null : layoutCode(bmcLayouts.getSelectedIndex() - 1);
-        config.applyLayout();
-        config.pasteNonAscii = ask.isSelected() ? "ask" : always.isSelected() ? "always" : "never";
-        config.remoteWindows = windows.isSelected();
-        config.savePrefs();
-        Log.d("settings: keyFix=" + config.enableKeyFix + " paste=" + config.enablePaste
-            + " default layout=" + config.defaultLayout + " " + bmc + "=" + (config.bmcLayout == null ? "default" : config.bmcLayout)
-            + " nonAscii=" + config.pasteNonAscii + " remoteWindows=" + config.remoteWindows
-            + " swapAltCmd default=" + config.swapDefault + " " + bmc + "=" + (config.bmcSwap == null ? "default" : config.bmcSwap));
+        build[0].run();
+        JOptionPane.showMessageDialog(parent, list, "Hosts with own settings", JOptionPane.PLAIN_MESSAGE);
     }
 
     /** Index of a layout code (or other: the last) in the dropdown. */

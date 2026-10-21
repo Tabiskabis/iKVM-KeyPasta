@@ -1,14 +1,15 @@
 #!/bin/bash
 # iKVM-KeyPasta, experimental: IPMIView's Java KVM console on macOS, also for BMCs with "stunnel"
 # (encrypted KVM), which IPMIView refuses on macOS ("The function can't support on mac") although
-# its Mac code is still there. With the Java agent, if installed. See README.md next to this file.
+# its Mac code is still there: the Java agent turns that code back on (MacStunnel), so the
+# encrypted console needs the agent. See README.md next to this file.
 #
 #   bash ipmiview-keypasta.sh [IPMIView folder]
 #
 # Changes in the IPMIView folder: renames the Linux Java folder jre to jre-linux, adds
-# BMCSecurity/mac/ (stunnel wrapper, stunnel.conf), keypasta-patch/ (the compiled stand-in class)
-# and proxy_ip=127.0.0.1 in stunnel.properties. stunnel's log: /tmp/iKVM-KeyPasta-stunnel.log
-# IPMIView runs in ~/.config/ipmiview (its settings: IPMIView.properties, account.properties).
+# BMCSecurity/mac/ (stunnel wrapper, stunnel.conf) and proxy_ip=127.0.0.1 in stunnel.properties. stunnel's log: /tmp/iKVM-KeyPasta-stunnel.log
+# IPMIView runs in ~/Library/Application Support/IPMIView (its settings: IPMIView.properties,
+# account.properties).
 
 # Settings
 IPMIVIEW="${1:-${IPMIVIEW:-$HOME/.local/bin/IPMIView_2.25.0_build.260709_bundleJRE_Linux_x64}}"
@@ -25,9 +26,6 @@ AGENT="${AGENT:-/opt/iKVM-KeyPasta/iKVM-KeyPasta-agent.jar}"
 IGNORE_EXPIRED_CERT="${IGNORE_EXPIRED_CERT:-false}"
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
-SRC="$HERE/patch/com/supermicro/ipmi/stunnel/StunnelFacotry.java"
-PATCH="$IPMIVIEW/keypasta-patch"
-CLASS="$PATCH/com/supermicro/ipmi/stunnel/StunnelFacotry.class"
 
 fail() {
     echo "$1" >&2
@@ -38,17 +36,6 @@ fail() {
 [ -x "$INTEL_JAVA/bin/java" ] || fail "No Java in $INTEL_JAVA: adjust INTEL_JAVA at the top of this file."
 cd "$IPMIVIEW" || exit 1
 IPMIVIEW="$(pwd)"   # absolute (links and class path below)
-PATCH="$IPMIVIEW/keypasta-patch"
-CLASS="$PATCH/com/supermicro/ipmi/stunnel/StunnelFacotry.class"
-
-# A real javac for the stand-in class, found before PATH changes. macOS ships a /usr/bin/javac
-# stub that only prints "Unable to locate a Java Runtime that supports javac", and a JRE has no
-# javac at all, so each candidate is tested with -version. None found: the prebuilt class is used.
-JAVAC=""
-for c in "$INTEL_JAVA/bin/javac" /Library/Java/JavaVirtualMachines/*/Contents/Home/bin/javac \
-         /opt/homebrew/opt/openjdk/bin/javac /usr/local/opt/openjdk/bin/javac "$(command -v javac)"; do
-    [ -n "$c" ] && [ -x "$c" ] && "$c" -version >/dev/null 2>&1 && { JAVAC="$c"; break; }
-done
 
 # In front in PATH: IPMIView starts the viewer as "java"
 export JAVA_HOME="$INTEL_JAVA"
@@ -111,26 +98,12 @@ if ! grep -q '^proxy_ip *=' stunnel.properties 2>/dev/null; then
     echo "proxy_ip=127.0.0.1" >> stunnel.properties || fail "Couldn't write $IPMIVIEW/stunnel.properties."
 fi
 
-# the stand-in StunnelFacotry, compiled against this IPMIView (again when the source is newer)
-PREBUILT="${SRC%.java}.class"   # Java-8 class shipped next to the source
-if [ ! -f "$CLASS" ] || [ "$SRC" -nt "$CLASS" ]; then
-    if [ -n "$JAVAC" ]; then
-        "$JAVAC" -source 8 -target 8 -Xlint:-options -nowarn -cp IPMIView20.jar -d "$PATCH" "$SRC" ||
-            fail "Couldn't compile $SRC."
-    elif [ -f "$PREBUILT" ]; then
-        mkdir -p "$(dirname "$CLASS")" && cp "$PREBUILT" "$CLASS" ||
-            fail "Couldn't install the prebuilt stand-in class."
-    else
-        fail "No JDK (javac) found and no prebuilt class shipped next to $SRC."
-    fi
-fi
-
 # the agent for IPMIView and the viewers it starts (they inherit the variable)
 if [ -f "$AGENT" ]; then
-    # AGENT_ARGS: agent options (the app passes macLed=native once Input Monitoring is allowed)
+    # AGENT_ARGS: agent options (the app passes its log file and the paste hotkey)
     export JAVA_TOOL_OPTIONS="-javaagent:$AGENT${AGENT_ARGS:+=$AGENT_ARGS}"
 else
-    echo "$AGENT not found: starting without the agent."
+    echo "$AGENT not found: starting without the agent (the encrypted console won't open)."
 fi
 
 # Dock names "IPMIView" and "iKVM Viewer" instead of "java" (see java-name.sh): "java" in PATH runs
@@ -146,19 +119,18 @@ if [ -n "${KEYPASTA_LAUNCHER:-}" ] && [ -x "$KEYPASTA_LAUNCHER" ] && [ -f "$NAME
 fi
 
 # IPMIView keeps its settings (IPMIView.properties: the BMC list; account.properties) and whatever
-# else it writes in its working folder. That's ~/.config/ipmiview, not the IPMIView folder: the
-# settings survive an IPMIView update. Everything of the IPMIView folder is linked in there (IPMIView
-# finds its files relative to the working folder: BMCSecurity/, stunnel.properties, iKVM.jar, ...),
-# the links made again on every start (the folder may have moved). Settings already in the IPMIView
-# folder (or in ~/.local/ipmiview, used for a while) move over once.
-DATA="$HOME/.config/ipmiview"
+# else it writes in its working folder. That's ~/Library/Application Support/IPMIView, not the
+# IPMIView folder: the settings survive an IPMIView update. Everything of the IPMIView folder is
+# linked in there (IPMIView finds its files relative to the working folder: BMCSecurity/,
+# stunnel.properties, iKVM.jar, ...), the links made again on every start (the folder may have
+# moved). Settings already in the IPMIView folder move over once. Not $XDG_CONFIG_HOME: the app
+# sets it for IcedTea-Web's own profile.
+DATA="$HOME/Library/Application Support/IPMIView"
 mkdir -p "$DATA" || fail "Couldn't create $DATA."
 for f in IPMIView.properties account.properties; do
-    for old in "$HOME/.local/ipmiview" "$IPMIVIEW"; do
-        if [ -f "$old/$f" ] && [ ! -L "$old/$f" ] && [ ! -e "$DATA/$f" ]; then
-            mv "$old/$f" "$DATA/$f" && echo "Moved $old/$f to $DATA."
-        fi
-    done
+    if [ -f "$IPMIVIEW/$f" ] && [ ! -L "$IPMIVIEW/$f" ] && [ ! -e "$DATA/$f" ]; then
+        mv "$IPMIVIEW/$f" "$DATA/$f" && echo "Moved $IPMIVIEW/$f to $DATA."
+    fi
 done
 find "$DATA" -maxdepth 1 -type l -exec rm -f {} + 2>/dev/null
 for e in "$IPMIVIEW"/* "$IPMIVIEW"/.[!.]*; do
@@ -168,6 +140,6 @@ for e in "$IPMIVIEW"/* "$IPMIVIEW"/.[!.]*; do
 done
 cd "$DATA" || exit 1
 
-# IPMIView20.lax's class path, the stand-in first. Its menus in the Mac's menu bar, as Mac apps have
+# IPMIView20.lax's class path. Its menus in the Mac's menu bar, as Mac apps have
 # them (only IPMIView: the viewers it starts keep theirs in the window)
-exec java -Xmx512m -Dapple.laf.useScreenMenuBar=true -cp "$PATCH:$IPMIVIEW/iKVM.jar:$IPMIVIEW/IPMIView20.jar:$IPMIVIEW/TrapView.jar:$IPMIVIEW/JViewerX9.jar:$IPMIVIEW/lax.jar" IPMIView20.IPMIView20
+exec java -Xmx512m -Dapple.laf.useScreenMenuBar=true -cp "$IPMIVIEW/iKVM.jar:$IPMIVIEW/IPMIView20.jar:$IPMIVIEW/TrapView.jar:$IPMIVIEW/JViewerX9.jar:$IPMIVIEW/lax.jar" IPMIView20.IPMIView20

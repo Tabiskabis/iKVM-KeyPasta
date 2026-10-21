@@ -31,12 +31,11 @@ if (ExitOnly) {             ; no tray icon, no hotkeys while it waits for the ot
     SetTrayIcon(false)      ; right away, before the restarts for more rights (see RestartPrivileged)
 
 ; EXE informational properties
-;@Ahk2Exe-SetProductName AutoHotKey
+;@Ahk2Exe-SetProductName AutoHotkey
 ;@Ahk2Exe-SetLegalTrademarks AHK executable: autohotkey.com
 ;@Ahk2Exe-SetCopyright AHK script by Tabiskabis: CC BY 3.0
 ;@Ahk2Exe-SetDescription iKVM-KeyPasta: Supermicro/ATEN iKVM keyboard fix and clipboard paste
 ;@Ahk2Exe-SetFileVersion 2.0.0.0
-;@Ahk2Exe-SetProductVersion 2.0.0
 
 ; If code signing is not feasible, uncomment this to automatically request elevation when launched
 ;;@Ahk2Exe-UpdateManifest 1
@@ -56,7 +55,9 @@ RemoteLayoutSetting := "auto" ; layout of the remote, for pasting: "de-CH" Swiss
                             ;   input language list (Windows settings), else Swiss German; a paste
                             ;   with line breaks or AltGr characters then asks first. A layout chosen
                             ;   in the tray menu for an iKVM Java window is kept for its BMC (the
-                            ;   [host] in its title; registry HKCU\Software\iKVM-KeyPasta\RemoteLayout)
+                            ;   [host] in its title; remoteLayout@<host> in the agent's settings
+                            ;   file, %AppData%\iKVM-KeyPasta\agent.properties, shared with the
+                            ;   Java agent's KeyPasta Preferences)
 
 PasteInOtherApps := true    ;  true: * activate shortcut for pasting clipboard to other programs, too
                             ; false:   use the hotkey for iKVM Java/HTML windows only
@@ -120,7 +121,10 @@ for Arg in A_Args {
 RemoteLayouts := Map("de-CH", {Klid: "00000807", Name: "Swiss German"}, "fr-CH", {Klid: "0000100C", Name: "Swiss French"}
     , "de-DE", {Klid: "00000407", Name: "German"}, "us", {Klid: "00000409", Name: "United States"})
 RemoteLayoutOrder := ["de-CH", "fr-CH", "de-DE", "us"]
-RemoteLayoutKey := "HKCU\Software\iKVM-KeyPasta\RemoteLayout"   ; value per BMC, see LayoutFor
+; The Java agent's settings file (agent.properties): a BMC's remote layout is remoteLayout@<host>
+; there, the agent's own key, so the tray menu and the viewer's KeyPasta Preferences set the same one
+AgentSettingsFile := (EnvGet("KEYPASTA_SETTINGS_DIR") != "" ? EnvGet("KEYPASTA_SETTINGS_DIR")
+    : A_AppData "\iKVM-KeyPasta") "\agent.properties"
 CurrentBmc := ""            ; BMC of the last active iKVM window ("" HTML5 or none), see NoteActiveBmc
 if (RemoteLayoutSetting != "other" and !RemoteLayouts.Has(RemoteLayoutSetting)) {
     ; "auto" (or unknown): the first one in the input language list, else Swiss German
@@ -388,11 +392,9 @@ NoteActiveBmc() {
 ; default (RemoteLayoutSetting).
 LayoutFor(Bmc) {
     if (Bmc != "") {
-        try {
-            Saved := RegRead(RemoteLayoutKey, Bmc)
-            if (Saved = "other" or RemoteLayouts.Has(Saved))
-                return {Setting: Saved, Chosen: true}
-        }
+        Saved := ReadAgentSettings().Get("remoteLayout@" Bmc, "")
+        if (Saved == "other" or RemoteLayouts.Has(Saved))
+            return {Setting: Saved, Chosen: true}
     }
     return {Setting: RemoteLayoutSetting, Chosen: RemoteLayoutChosen}
 }
@@ -1314,11 +1316,11 @@ BuildTrayMenu() {
         . "Non-ASCII: " NonAsciiLabel
 }
 
-; For the BMC of the last active iKVM Java window (kept in the registry), else the default
+; For the BMC of the last active iKVM Java window (kept in the agent's settings file), else the default
 SetRemoteLayout(Value) {
     global RemoteLayoutSetting, RemoteLayoutChosen
     if (CurrentBmc != "") {
-        try RegWrite(Value, "REG_SZ", RemoteLayoutKey, CurrentBmc)
+        try WriteAgentSetting("remoteLayout@" CurrentBmc, Value)
         catch as Err
             Log("  remote layout for " CurrentBmc " not saved: " Err.Message)
     } else {
@@ -1326,6 +1328,98 @@ SetRemoteLayout(Value) {
         RemoteLayoutChosen := true
     }
     BuildTrayMenu()
+}
+
+;
+; The agent's settings file: Java properties as the agent writes them (key=value, escapes with \,
+; UTF-8). Read fresh every time, written whole through a temporary file renamed over it, like the
+; agent does, so neither loses the other's settings.
+;
+ReadAgentSettings() {
+    Settings := Map()
+    try Text := FileRead(AgentSettingsFile, "UTF-8")
+    catch
+        return Settings
+    Pending := ""
+    loop parse Text, "`n", "`r" {
+        Line := Pending LTrim(A_LoopField, " `t`f")
+        Pending := ""
+        First := SubStr(Line, 1, 1)
+        if (Line = "" or First = "#" or First = "!")
+            continue
+        if (RegExMatch(Line, "(\\+)$", &Trail) and Mod(StrLen(Trail[1]), 2) = 1) {
+            Pending := SubStr(Line, 1, -1)  ; continued on the next line
+            continue
+        }
+        ; the key ends at the first =, : or blank that isn't escaped
+        i := 1, n := StrLen(Line)
+        while (i <= n) {
+            c := SubStr(Line, i, 1)
+            if (c == "\") {
+                i += 2
+                continue
+            }
+            if (c == "=" or c == ":" or c == " " or c == "`t" or c == "`f")
+                break
+            i++
+        }
+        Rest := LTrim(SubStr(Line, i), " `t`f")
+        if (SubStr(Rest, 1, 1) == "=" or SubStr(Rest, 1, 1) == ":")
+            Rest := LTrim(SubStr(Rest, 2), " `t`f")
+        Settings[PropUnescape(SubStr(Line, 1, i - 1))] := PropUnescape(Rest)
+    }
+    return Settings
+}
+
+WriteAgentSetting(Key, Value) {
+    SplitPath(AgentSettingsFile, , &Dir)
+    DirCreate(Dir)
+    Settings := ReadAgentSettings()
+    Settings[Key] := Value
+    Keys := ""
+    for K in Settings
+        Keys .= K "`n"
+    Text := "# iKVM-KeyPasta agent settings (the viewer's Options > KeyPasta Preferences).`n"
+        . "# setting=value: the default; setting@host=value: that host's own.`n"
+    loop parse Sort(RTrim(Keys, "`n"), "C"), "`n"
+        Text .= PropEscape(A_LoopField, true) "=" PropEscape(Settings[A_LoopField], false) "`n"
+    Tmp := AgentSettingsFile ".ahk.tmp"
+    try FileDelete(Tmp)
+    FileAppend(Text, Tmp, "UTF-8-RAW")
+    FileMove(Tmp, AgentSettingsFile, 1)
+}
+
+PropUnescape(S) {
+    Out := "", i := 1, n := StrLen(S)
+    while (i <= n) {
+        c := SubStr(S, i, 1)
+        if (c != "\" or i = n) {
+            Out .= c, i++
+            continue
+        }
+        d := SubStr(S, i + 1, 1)
+        if (d == "u" and RegExMatch(SubStr(S, i + 2, 4), "^[0-9A-Fa-f]{4}$")) {
+            Out .= Chr(Integer("0x" SubStr(S, i + 2, 4))), i += 6
+            continue
+        }
+        Out .= d == "t" ? "`t" : d == "n" ? "`n" : d == "r" ? "`r" : d == "f" ? "`f" : d
+        i += 2
+    }
+    return Out
+}
+
+PropEscape(S, IsKey) {
+    Out := ""
+    loop parse S {
+        c := A_LoopField, o := Ord(c)
+        if (InStr("\=:#!", c) or (IsKey and c == " ") or (A_Index = 1 and c == " "))
+            Out .= "\" c
+        else if (o < 0x20 or o > 0x7E)
+            Out .= Format("\u{:04x}", o)
+        else
+            Out .= c
+    }
+    return Out
 }
 
 SetRemoteWindows(Value) {

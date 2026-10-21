@@ -12,14 +12,29 @@
 // ask once per page (each port is a page of its own), Safari shows a "Paste" button, Firefox a
 // menu entry. Not allowed or empty: the key goes on all the same (the container's clipboard).
 //
-// The hotkey: keypasta_paste=alt+shift+V in the page's address (the app puts its setting there);
-// the agent's own syntax: ctrl, alt (option), shift, meta (cmd), then a letter, digit or F1-F24.
-// By the key's position on a US keyboard (the container's layout, where the agent looks for it).
+// The hotkeys: keypasta.json next to the page, {"paste": ["alt+shift+V", ...]}: every paste hotkey
+// in the agent's settings, the default and the hosts' own (keypasta-websockify reads them from
+// agent.properties); the page can't know which BMC's viewer has the focus, the agent decides. The
+// agent's syntax: ctrl, alt (option), shift, meta (cmd), then the key: a letter, a digit, or a
+// Java key name (F1-F24, INSERT, NUMPAD5, SEMICOLON, ...; NAMED below has the ones known here, a
+// hotkey with another key is left to the agent: the container's clipboard). By the key's position
+// on a US keyboard (the container's layout, where the agent looks for it).
 
 import UI from './app/ui.js';
 
-const spec = new URLSearchParams(location.search).get('keypasta_paste') || 'alt+shift+V';
-const hotkey = parse(spec);
+let specs = ['alt+shift+V'];
+try {
+    const r = await fetch('keypasta.json', { cache: 'no-store' });
+    if (r.ok) {
+        const p = (await r.json()).paste;
+        if (Array.isArray(p) && p.length) specs = p;
+        else if (typeof p === 'string' && p) specs = [p];
+    }
+} catch (err) {
+    // the default
+}
+const hotkeys = specs.map(parse).filter(h => /^[A-Z0-9]$/.test(h.key) || NAMED[h.key]);
+const spec = specs.join(', ');
 const swallowed = new Set();
 
 function parse(s) {
@@ -34,27 +49,45 @@ function parse(s) {
     return h;
 }
 
-// The key by its position: "V", "5", "F5"; null for others.
+// Java key names (KeyEvent.VK_ without VK_) -> [e.code, X keysym], besides letters, digits, F1-F24
+const NAMED = {
+    INSERT: ['Insert', 0xFF63], DELETE: ['Delete', 0xFFFF], HOME: ['Home', 0xFF50], END: ['End', 0xFF57],
+    PAGE_UP: ['PageUp', 0xFF55], PAGE_DOWN: ['PageDown', 0xFF56], UP: ['ArrowUp', 0xFF52],
+    DOWN: ['ArrowDown', 0xFF54], LEFT: ['ArrowLeft', 0xFF51], RIGHT: ['ArrowRight', 0xFF53],
+    PAUSE: ['Pause', 0xFF13], SCROLL_LOCK: ['ScrollLock', 0xFF14], PRINTSCREEN: ['PrintScreen', 0xFF61],
+    ENTER: ['Enter', 0xFF0D], TAB: ['Tab', 0xFF09], SPACE: ['Space', 0x20], BACK_SPACE: ['Backspace', 0xFF08],
+    ESCAPE: ['Escape', 0xFF1B], MULTIPLY: ['NumpadMultiply', 0xFFAA], ADD: ['NumpadAdd', 0xFFAB],
+    SUBTRACT: ['NumpadSubtract', 0xFFAD], DECIMAL: ['NumpadDecimal', 0xFFAE], DIVIDE: ['NumpadDivide', 0xFFAF],
+    SEMICOLON: ['Semicolon', 0x3B], EQUALS: ['Equal', 0x3D], COMMA: ['Comma', 0x2C], MINUS: ['Minus', 0x2D],
+    PERIOD: ['Period', 0x2E], SLASH: ['Slash', 0x2F], BACK_QUOTE: ['Backquote', 0x60],
+    OPEN_BRACKET: ['BracketLeft', 0x5B], CLOSE_BRACKET: ['BracketRight', 0x5D], BACK_SLASH: ['Backslash', 0x5C],
+    QUOTE: ['Quote', 0x27],
+};
+for (let n = 0; n <= 9; n++) NAMED['NUMPAD' + n] = ['Numpad' + n, 0xFFB0 + n];
+for (let n = 1; n <= 24; n++) NAMED['F' + n] = ['F' + n, 0xFFBE + n - 1];
+
+// The key by its position, in the agent's names: "V", "5", "F5", "INSERT"; null for others.
 function keyOf(e) {
     let m = /^Key([A-Z])$/.exec(e.code);
     if (m) return m[1];
     m = /^Digit([0-9])$/.exec(e.code);
     if (m) return m[1];
-    m = /^F([0-9]{1,2})$/.exec(e.code);
-    if (m) return 'F' + m[1];
+    for (const name in NAMED) if (NAMED[name][0] === e.code) return name;
     return null;
 }
 
-// X keysym of such a key: the lowercase letter, the digit, XK_F1 + n - 1.
+// X keysym of such a key: the lowercase letter, the digit, else from NAMED.
 function keysymOf(key) {
     if (/^[A-Z]$/.test(key)) return key.toLowerCase().charCodeAt(0);
     if (/^[0-9]$/.test(key)) return key.charCodeAt(0);
-    return 0xFFBE + parseInt(key.slice(1), 10) - 1;
+    return NAMED[key][1];
 }
 
-function isHotkey(e) {
-    return keyOf(e) === hotkey.key && e.ctrlKey === hotkey.ctrl && e.altKey === hotkey.alt
-        && e.shiftKey === hotkey.shift && e.metaKey === hotkey.meta;
+// The hotkey this key press is, or null
+function hotkeyOf(e) {
+    const key = keyOf(e);
+    return hotkeys.find(h => key === h.key && e.ctrlKey === h.ctrl && e.altKey === h.alt
+        && e.shiftKey === h.shift && e.metaKey === h.meta) || null;
 }
 
 function stop(e) {
@@ -65,12 +98,13 @@ function stop(e) {
 // Capture phase on the window: before noVNC's own key handling (on its canvas) sees the key.
 window.addEventListener('keydown', (e) => {
     const rfb = UI.rfb;
-    if (!rfb || !hotkey.key) return;
+    if (!rfb || !hotkeys.length) return;
     if (swallowed.has(e.code)) {                // its key repeat
         stop(e);
         return;
     }
-    if (!isHotkey(e)) return;
+    const hotkey = hotkeyOf(e);
+    if (!hotkey) return;
     stop(e);
     swallowed.add(e.code);
     const code = e.code;
@@ -93,6 +127,9 @@ window.addEventListener('keydown', (e) => {
 
 window.addEventListener('keyup', (e) => {
     if (swallowed.delete(e.code)) stop(e);
+    // macOS sends no release for a key pressed with Command held: the hotkey's key (cmd+shift+V)
+    // stayed "swallowed", and every later press of it with it. Command up: none is held any more.
+    if (e.key === 'Meta') swallowed.clear();
 }, true);
 
 // CLIPBOARD, shared both ways, as far as the browser lets a page:

@@ -1,0 +1,104 @@
+#!/usr/bin/python3
+# keypasta-jnlp-jars JNLP DIR OUT: the .jnlp's jars (this Linux's: the main jar, the native
+# library jar) fetched from the BMC into DIR, and a copy of the .jnlp at OUT that IcedTea-Web
+# loads them from (its codebase DIR).
+# Why: the BMC serves its jars Pack200-compressed only (NAME.jar.pack.gz; NAME.jar: 404).
+# IcedTea-Web here can't unpack those ("Pack200 compression is no longer supported", removed from
+# Java in 14), so it loaded nothing ("Unknown Main-Class"). Java 11's unpack200 still can.
+# A plain NAME.jar is taken as it is if the BMC has one.
+import os
+import re
+import ssl
+import subprocess
+import sys
+import urllib.error
+import urllib.request
+import xml.etree.ElementTree as ET
+
+UNPACK200 = os.path.join(os.environ.get("JAVA_HOME", "/usr/lib/jvm/java-11-openjdk-amd64"),
+                         "bin", "unpack200")
+# the BMC's certificate is its own (self-signed); the .jnlp is the one you downloaded from it
+TLS = ssl._create_unverified_context()
+
+
+def local(tag):
+    return tag.rsplit("}", 1)[-1]
+
+
+def wanted(res):
+    """A <resources> for every system, or for this one (Linux, 64-bit x86)."""
+    os_ = res.get("os", "")
+    arch = res.get("arch", "")
+    if os_ and not any(o.lower().startswith("linux") for o in os_.split()):
+        return False
+    return not arch or any(a in ("amd64", "x86_64") for a in arch.split())
+
+
+def hrefs(root):
+    seen = []
+    for res in root.iter():
+        if local(res.tag) != "resources" or not wanted(res):
+            continue
+        for el in res:
+            if local(el.tag) in ("jar", "nativelib") and el.get("href"):
+                if el.get("href") not in seen:
+                    seen.append(el.get("href"))
+    return seen
+
+
+def get(url):
+    with urllib.request.urlopen(urllib.request.Request(url), timeout=60, context=TLS) as r:
+        return r.read()
+
+
+def fetch(base, href, dest):
+    os.makedirs(os.path.dirname(dest), exist_ok=True)
+    try:
+        data = get(base + href)
+        with open(dest, "wb") as f:
+            f.write(data)
+        return "jar"
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+    packed = dest + ".pack.gz"
+    with open(packed, "wb") as f:
+        f.write(get(base + href + ".pack.gz"))
+    subprocess.run([UNPACK200, "-r", packed, dest], check=True)
+    return "pack200"
+
+
+def main(jnlp, outdir, out):
+    with open(jnlp, "rb") as f:
+        text = f.read().decode("utf-8", errors="replace")
+    root = ET.fromstring(text.encode("utf-8"))
+    base = root.get("codebase", "")
+    if not base:
+        sys.exit("jnlp-jars: no codebase in " + jnlp)
+    if not base.endswith("/"):
+        base += "/"
+    names = hrefs(root)
+    if not names:
+        sys.exit("jnlp-jars: no jars in " + jnlp)
+    for href in names:
+        if "://" in href or href.startswith("/") or ".." in href.split("/"):
+            sys.exit("jnlp-jars: unexpected jar address: " + href)
+        how = fetch(base, href, os.path.join(outdir, href))
+        print("jnlp-jars: %s (%s)" % (href, how), flush=True)
+    local_base = "file://" + os.path.abspath(outdir) + "/"
+    text, n = re.subn(r'(<jnlp\b[^>]*?\bcodebase=)"[^"]*"', r'\1"%s"' % local_base, text, count=1)
+    if n != 1:
+        sys.exit("jnlp-jars: codebase not rewritable in " + jnlp)
+    # the jars are plain now: no asking for .pack.gz ones
+    text = re.sub(r'(name="jnlp\.packEnabled"\s*value=)"true"', r'\1"false"', text)
+    with open(out, "w", encoding="utf-8") as f:
+        f.write(text)
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 4:
+        sys.exit("usage: keypasta-jnlp-jars JNLP DIR OUT")
+    try:
+        main(*sys.argv[1:])
+    except (OSError, urllib.error.URLError, subprocess.CalledProcessError, ET.ParseError) as e:
+        sys.exit("jnlp-jars: %s" % e)

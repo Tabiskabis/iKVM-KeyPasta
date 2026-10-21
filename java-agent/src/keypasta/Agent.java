@@ -53,6 +53,7 @@ public final class Agent {
 
     private static void startUnchecked(String args, Instrumentation inst) {
         config = Config.parse(args);
+        IPMIViewLogin.trace = config.loginTrace;
         Log.path = config.log;
         instrumentation = inst;
         // macOS: the menu bar of every window (the viewers', IPMIView's) in the Mac's menu bar
@@ -78,6 +79,11 @@ public final class Agent {
                         public void run() {
                             X11Name.start("IPMIView");          // Linux: the desktop launcher's windows
                             Icons.ipmiviewDock();
+                            try {
+                                Unbrand.install();
+                            } catch (Throwable t) {
+                                Log.d("unbranding not installed: " + t);
+                            }
                             try {
                                 StunnelNote.install();
                             } catch (Throwable t) {
@@ -107,8 +113,15 @@ public final class Agent {
                     return Patch.redirectLocalHost(bytes);      // loopback instead of the own address lookup (see LocalHost)
                 if ("IPMIView20/IPMISession".equals(name))
                     return Patch.redirectSensorsTab(bytes);     // sensors in the text view (see IPMIViewLogin)
-                if ("com/supermicro/ipmi/stunnel/StunnelUtility".equals(name))
-                    return Patch.redirectLaunch(bytes, name);  // timed, the stunnel wait shortened (see LaunchTiming)
+                if ("com/supermicro/ipmi/stunnel/StunnelUtility".equals(name)) {
+                    byte[] out = Patch.redirectLaunch(bytes, name);  // timed, the stunnel wait shortened (see LaunchTiming)
+                    if (Config.MAC && MacStunnel.define(loader)) {   // the encrypted console on macOS (see MacStunnel)
+                        byte[] mac = Patch.redirectStunnel(out != null ? out : bytes);
+                        if (mac != null)
+                            out = mac;
+                    }
+                    return out;
+                }
                 if (Config.MAC && MacKeys.ready() && ("sun/lwawt/macosx/CPlatformResponder".equals(name)
                         || "sun/lwawt/LWWindowPeer".equals(name)))
                     return Patch.redirectMacKeys(bytes, name);  // the physical key (see MacKeys)
@@ -141,13 +154,10 @@ public final class Agent {
                         if (mouse != null)
                             out = mouse;
                     }
-                    if (Config.MAC || Config.LINUX) {
-                        // macOS: its LED code quits the viewer without Input Monitoring; Linux: its
-                        // LED sync types lock keys locally, which reached the remote (see Native)
-                        if (Config.MAC) {
-                            Native.ledFallback = !config.macLedNative;
-                            Log.d("macOS keyboard LEDs: " + (config.macLedNative ? "native" : "fallback"));
-                        }
+                    {
+                        // macOS: its LED code quits the viewer without a permission; Linux: its
+                        // LED sync types lock keys locally, which reached the remote; Windows and
+                        // Linux: Simplify Caps Lock (see Native)
                         byte[] redirected = Patch.redirectNatives(out != null ? out : bytes);
                         if (redirected != null)
                             out = redirected;
@@ -291,6 +301,25 @@ public final class Agent {
                 Map.class, Map.class, Set.class, Map.class);
             Map opens = Collections.singletonMap(pkg, Collections.singleton(self));
             redefine.invoke(instrumentation, desktop, Collections.emptySet(), Collections.emptyMap(), opens,
+                Collections.emptySet(), Collections.emptyMap());
+        } catch (NoSuchMethodException e) {
+            // Java 8
+        } catch (Exception e) {
+            Log.d("opening " + pkg + " failed: " + e);
+        }
+    }
+
+    /** Java 9+: a package of java.base opened to this agent (private members by reflection). */
+    static void openBase(String pkg) {
+        try {
+            Method getModule = Class.class.getMethod("getModule");
+            Object base = getModule.invoke(Object.class);
+            Object self = getModule.invoke(Agent.class);
+            Class<?> moduleClass = Class.forName("java.lang.Module");
+            Method redefine = Instrumentation.class.getMethod("redefineModule", moduleClass, Set.class,
+                Map.class, Map.class, Set.class, Map.class);
+            Map<String, Set<Object>> opens = Collections.singletonMap(pkg, Collections.singleton(self));
+            redefine.invoke(instrumentation, base, Collections.emptySet(), Collections.emptyMap(), opens,
                 Collections.emptySet(), Collections.emptyMap());
         } catch (NoSuchMethodException e) {
             // Java 8

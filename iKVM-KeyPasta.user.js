@@ -1,26 +1,31 @@
 // ==UserScript==
 // @name         Supermicro IPMI / ATEN BMC: iKVM KeyPasta (keyboard fix)
-// @namespace    https://github.com/Tabiskabis/iKVM-KeyPasta
-// @version      2.4.0
-// @match        *://*/cgi/url_redirect.cgi?url_name=man_ikvm_html5_bootstrap*
-// @match        *://*/redfish/*.IKVM
+// @description  iKVM/HTML5 viewer: sends every key by its physical position, so the remote's keyboard layout decides what it types, like a keyboard attached to it, and pastes the clipboard with a hotkey (Alt+Shift+V, macOS: Cmd+Shift+V; per BMC too). Part of the iKVM-KeyPasta project at https://github.com/Tabiskabis/iKVM-KeyPasta
+// @version      2.5.1
+// @author       Tabiskabis
+// @namespace    Tabiskabis.iKVM-KeyPasta
+// @homepageURL  https://github.com/Tabiskabis/iKVM-KeyPasta
+// @updateURL    https://raw.githubusercontent.com/Tabiskabis/iKVM-KeyPasta/main/iKVM-KeyPasta.user.js
+// @downloadURL  https://raw.githubusercontent.com/Tabiskabis/iKVM-KeyPasta/main/iKVM-KeyPasta.user.js
 // @grant        GM.getValue
 // @grant        GM.setValue
 // @grant        GM.registerMenuCommand
 // @run-at       document-idle
-// @description  iKVM/HTML5 viewer: sends every key by its physical position, so the remote's keyboard layout decides what it types, like a keyboard attached to it, and pastes the clipboard with Alt+Shift+V (macOS: Cmd+Shift+V). Part of iKVM-KeyPasta: https://github.com/Tabiskabis/iKVM-KeyPasta
+// @match        *://*/cgi/url_redirect.cgi?url_name=man_ikvm_html5_bootstrap*
+// @match        *://*/redfish/*.IKVM
 // ==/UserScript==
 
 // The viewer (an old noVNC) turns each typed CHARACTER into a US key position (ast2100.js Keymap),
 // sends only left-hand modifiers and never AltGr: most non-US layouts can't be typed correctly.
 // This replaces its keyboard handling: the browser's physical key position (event.code) is sent
 // as the matching USB key, modifiers included (right Alt = the remote's AltGr).
-// Alt+Shift+V (macOS: Cmd+Shift+V) types the clipboard into the remote (with CapsLock on: safe
-// paste, everything as alt codes). Where this script runs, iKVM-KeyPasta.ahk leaves the
+// The paste hotkey (default Alt+Shift+V, macOS: Cmd+Shift+V; set in the settings, a default and per
+// BMC) types the clipboard into the remote (with CapsLock on: safe paste, everything as alt codes). Where this script runs, iKVM-KeyPasta.ahk leaves the
 // hotkey to it.
 // The page title gets " ⌨" appended, so iKVM-KeyPasta.ahk knows this script is active.
-// Settings (the extension's menu, "KeyPasta settings…"): the remote's layout, a default and per BMC
-// (by host), characters not on the keyboard, the remote system for alt codes. Kept in the
+// Settings (the extension's menu, "KeyPasta settings…"): the remote's layout and the paste hotkey,
+// each a default and per BMC (by host), characters not on the keyboard, the remote system for alt
+// codes. Kept in the
 // extension's storage for this script (GM.getValue/setValue: not readable by the BMC's pages,
 // not lost with the site's data), loaded before the page part starts.
 
@@ -114,11 +119,37 @@
 
         var MAC = /Mac|iPhone|iPad/.test(navigator.platform || "");
 
-        // Alt+Shift+V, macOS: Cmd+Shift+V. By letter like Ctrl+V (e.key), wherever the local layout has it
+        // The paste hotkey, as the Java agent writes it: modifiers (ctrl, alt/option, shift,
+        // meta/cmd/win) and a letter, digit or F1-F24; a default and this BMC's own (null: the
+        // default). Default Alt+Shift+V, macOS Cmd+Shift+V.
+        var DEFAULT_HOTKEY = MAC ? "meta+shift+V" : "alt+shift+V";
+        var defaultHotkey = parseHotkey(settings.defaultHotkey || "") ? settings.defaultHotkey : DEFAULT_HOTKEY;
+        var hostHotkey = parseHotkey(settings.hostHotkey || "") ? settings.hostHotkey : null;
+        function parseHotkey(spec) {
+            var parts = String(spec).split("+").map(function (p) { return p.trim().toLowerCase(); });
+            var key = (parts.pop() || "").toUpperCase();
+            if (!/^([A-Z]|[0-9]|F([1-9]|1[0-9]|2[0-4]))$/.test(key)) { return null; }
+            var h = {ctrl: false, alt: false, shift: false, meta: false, key: key};
+            for (var i = 0; i < parts.length; i++) {
+                var m = parts[i];
+                if (m === "ctrl" || m === "control") { h.ctrl = true; }
+                else if (m === "alt" || m === "option") { h.alt = true; }
+                else if (m === "shift") { h.shift = true; }
+                else if (m === "meta" || m === "cmd" || m === "win") { h.meta = true; }
+                else { return null; }
+            }
+            return h;
+        }
+        // By the key's place (e.code) or, for a letter, by the letter like Ctrl+V (e.key),
+        // wherever the local layout has it
         function isPasteHotkey(e) {
-            return e.type === "keydown" && e.shiftKey && !e.ctrlKey
-                && (MAC ? e.metaKey && !e.altKey : e.altKey && !e.metaKey)
-                && (e.code === "KeyV" || (e.key && e.key.toLowerCase() === "v"));
+            var h = parseHotkey(hostHotkey || defaultHotkey);
+            if (!h || e.type !== "keydown" || e.ctrlKey !== h.ctrl || e.altKey !== h.alt
+                    || e.shiftKey !== h.shift || e.metaKey !== h.meta) { return false; }
+            if (/^[A-Z]$/.test(h.key)) {
+                return e.code === "Key" + h.key || (!!e.key && e.key.toUpperCase() === h.key);
+            }
+            return e.code === (/^[0-9]$/.test(h.key) ? "Digit" + h.key : h.key);
         }
 
         // The viewer's own hotkeys (Options › Hotkey Settings: Ctrl+Shift+F2..F6, shortcut.js on the
@@ -380,7 +411,7 @@
             + "color:var(--dim);margin:10px 0 0}"
             + "h2{grid-column:1/-1}h2:first-child{margin-top:0}"
             + ".grid{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 12px;align-items:center}"
-            + "select{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);"
+            + "select,input[type=text]{font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);"
             + "border-radius:6px;padding:4px 6px;width:100%;box-sizing:border-box}"
             + ".note{margin-top:16px;font-size:12px;color:var(--dim)}"
             + ".os{margin-top:10px;display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center}"
@@ -431,7 +462,7 @@
                 };
                 dialogCancel = function () { done(null); };     // Esc, see onKey
                 dialogTab = function (back) {                   // Tab, see onKey
-                    var items = Array.prototype.slice.call(box.querySelectorAll("select, button, input:checked"));
+                    var items = Array.prototype.slice.call(box.querySelectorAll("select, button, input:checked, input[type=text]"));
                     var i = items.indexOf(root.activeElement);
                     i = i < 0 ? 0 : (i + (back ? items.length - 1 : 1)) % items.length;
                     items[i].focus();
@@ -571,6 +602,15 @@
             sel.value = value;
             return sel;
         }
+        function textField(value, placeholder) {
+            var input = document.createElement("input");
+            input.type = "text";
+            input.id = "kp-select-" + (++selectCount);
+            input.value = value || "";
+            input.placeholder = placeholder || "";
+            input.spellcheck = false;
+            return input;
+        }
         function section(grid, heading, rows) {     // in one grid: the controls line up
             var h = document.createElement("h2");
             h.textContent = heading;
@@ -594,11 +634,17 @@
             var grid = document.createElement("div");
             grid.className = "grid";
             panel.appendChild(grid);
-            section(grid, "Keyboard layout of the remote computer", [["Default", def], ["This BMC" + (location.hostname ? " (" + location.hostname + ")" : ""), own]]);
+            var thisBmc = "This BMC" + (location.hostname ? " (" + location.hostname + ")" : "");
+            var hotDef = textField(defaultHotkey, DEFAULT_HOTKEY);
+            var hotOwn = textField(hostHotkey || "", "Same as the default");
+            section(grid, "Keyboard layout of the remote computer", [["Default", def], [thisBmc, own]]);
+            section(grid, "Paste hotkey", [["Default", hotDef], [thisBmc, hotOwn]]);
             section(grid, "Pasting", [["Characters not on the keyboard", nonAscii], ["Alt codes for", os]]);
             var note = document.createElement("div");
             note.className = "note";
-            note.textContent = "With CapsLock on, a paste types everything as alt codes (safe paste).";
+            note.textContent = "Hotkey: ctrl, alt (Option), shift, meta (" + (MAC ? "Cmd" : "Win")
+                + ") and a letter, digit or F1-F24, e.g. " + DEFAULT_HOTKEY + ". "
+                + "With CapsLock on, a paste types everything as alt codes (safe paste).";
             panel.appendChild(note);
             var answer = await ask("", ["Cancel", "OK"], 1, false, panel, "iKVM-KeyPasta settings");
             if (answer !== "OK") { return; }
@@ -607,8 +653,12 @@
             layoutSaid = true;
             PASTE_NON_ASCII = nonAscii.value;
             remoteWindows = os.value === "windows";
+            // a hotkey that isn't one: left as it was
+            if (parseHotkey(hotDef.value)) { defaultHotkey = hotDef.value.trim(); }
+            if (!hotOwn.value.trim()) { hostHotkey = null; }
+            else if (parseHotkey(hotOwn.value)) { hostHotkey = hotOwn.value.trim(); }
             save({defaultLayout: defaultLayout, hostLayout: hostLayout, pasteNonAscii: PASTE_NON_ASCII,
-                remoteWindows: remoteWindows});
+                remoteWindows: remoteWindows, defaultHotkey: defaultHotkey, hostHotkey: hostHotkey});
             var canvas = document.querySelector("canvas");
             if (canvas) { canvas.focus(); }
         }
@@ -769,15 +819,18 @@
         mark();
     }
 
-    // The settings, from the extension's storage: a default layout, one per BMC (key: layout:<host>),
-    // the rest global. Saved when the page part reports a change.
+    // The settings, from the extension's storage: a default layout and hotkey, each one per BMC too
+    // (keys layout:<host>, pasteHotkey:<host>), the rest global. Saved when the page part reports a
+    // change.
     var host = location.host;
     async function load() {
         return {
             defaultLayout: await GM.getValue("defaultLayout", ""),
             hostLayout: await GM.getValue("layout:" + host, ""),
             pasteNonAscii: await GM.getValue("pasteNonAscii", ""),
-            remoteWindows: await GM.getValue("remoteWindows", false)
+            remoteWindows: await GM.getValue("remoteWindows", false),
+            defaultHotkey: await GM.getValue("pasteHotkey", ""),
+            hostHotkey: await GM.getValue("pasteHotkey:" + host, "")
         };
     }
     window.addEventListener("ikvm-keypasta-save", function (ev) {
@@ -786,6 +839,8 @@
         if ("hostLayout" in values) { GM.setValue("layout:" + host, values.hostLayout || ""); }
         if ("pasteNonAscii" in values) { GM.setValue("pasteNonAscii", values.pasteNonAscii); }
         if ("remoteWindows" in values) { GM.setValue("remoteWindows", !!values.remoteWindows); }
+        if ("defaultHotkey" in values) { GM.setValue("pasteHotkey", values.defaultHotkey || ""); }
+        if ("hostHotkey" in values) { GM.setValue("pasteHotkey:" + host, values.hostHotkey || ""); }
     });
     if (typeof GM.registerMenuCommand === "function") {
         GM.registerMenuCommand("KeyPasta settings…", function () {

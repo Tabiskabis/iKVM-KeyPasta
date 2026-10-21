@@ -14,8 +14,9 @@
 ::     Set in the copy below, so no OpenWebStart setting forces it on other programs.
 ::   - The .jnlp is moved to the user's %TEMP%\iKVM-KeyPasta\ (also when the UAC prompt is
 ::     answered with another admin account), named launch-<date>-<time>-<BMC>-<random>.jnlp, and
-::     kept there. Out of Downloads, the browser saves the next one under the same name. Opened
-::     again, it works only as long as the BMC accepts the console session's login data in it.
+::     kept there for a week after it was last opened (older ones are deleted at each start).
+::     Out of Downloads, the browser saves the next one under the same name. Opened again, it
+::     works only as long as the BMC accepts the console session's login data in it.
 ::
 ::   iKVM-jnlp-launcher.cmd /register     offer it for .jnlp files (as yourself, not as admin;
 ::                                         /register /quiet: without messages, for install.cmd),
@@ -24,7 +25,10 @@
 ::   iKVM-jnlp-launcher.cmd /unregister   remove that again
 ::
 :: Keep this file next to iKVM-KeyPasta-agent.jar, in a folder only admins can write to
-:: (%ProgramFiles%\iKVM-KeyPasta\): it runs as admin.
+:: (%ProgramFiles%\iKVM-KeyPasta\): it runs as admin. Not there: the jar one folder up (the repo:
+:: this file in windows\, the built jar above). Both are as safe as this file itself: who may write
+:: the folder above may also replace this one. No other place (no variable): that would let any
+:: program of yours choose what runs as admin.
 
 setlocal
 
@@ -33,11 +37,19 @@ set "OWS=%ProgramFiles%\OpenWebStart"
 :: Java version for the iKVM viewer (OpenWebStart's syntax: 1.8* = any 1.8). Empty: as the .jnlp says
 set "JAVAVERSION=1.8*"
 set "AGENT=%~dp0iKVM-KeyPasta-agent.jar"
+if not exist "%AGENT%" if exist "%~dp0..\iKVM-KeyPasta-agent.jar" for %%F in ("%~dp0..\iKVM-KeyPasta-agent.jar") do set "AGENT=%%~fF"
 set "USERTEMP=%TEMP%"
 set "SELF=%~f0"
 set "PROGID=iKVM-KeyPasta.jnlp"
 set "ICON=%~dp0PPCH_outlined_dark.ico"
 
+rem without a file: the newest launch*.jnlp in Downloads (browsers save another one as
+rem "launch (1).jnlp" and so on)
+if "%~1"=="" for /f "delims=" %%F in ('dir /b /a-d /o-d /t:w "%USERPROFILE%\Downloads\launch*.jnlp" 2^>nul') do (
+    set "JNLP=%USERPROFILE%\Downloads\%%F"
+    goto :newest
+)
+:newest
 if /i "%~1"=="/register" goto :register
 if /i "%~1"=="/unregister" goto :unregister
 rem the restart as admin gets the user's .jnlp and %TEMP% passed on
@@ -118,6 +130,8 @@ if not exist "%COPY%" (
     pause
     exit /b 1
 )
+rem Copies not opened for a week: deleted. This one counts as opened now (its date set to now).
+powershell -NoProfile -Command "$old = (Get-Date).AddDays(-7); Get-ChildItem -LiteralPath $env:COPYDIR -Filter 'launch-*.jnlp' | Where-Object { $_.LastWriteTime -lt $old } | Remove-Item -Force -ErrorAction SilentlyContinue; (Get-Item -LiteralPath $env:COPY).LastWriteTime = Get-Date" >nul 2>&1
 rem the Java version the .jnlp asks for (<j2se version="..."> or <java version="...">)
 if defined JAVAVERSION powershell -NoProfile -Command "$f = $env:COPY; $t = [IO.File]::ReadAllText($f); [IO.File]::WriteAllText($f, ($t -replace '(<(?:j2se|java)\b[^>]*?\bversion\s*=\s*)([\x22''])[^\x22'']*\2', ('${1}${2}' + $env:JAVAVERSION + '${2}')))" >nul 2>&1
 start "" "%OWS%\javaws.exe" "%COPY%"

@@ -11,17 +11,18 @@ import java.security.PrivilegedAction;
  * macOS: the viewer's native keyboard and LED calls land here (Patch.redirectNatives).
  *
  * iKVM's macOS library reads and sets the keyboard LEDs by opening the keyboard as a USB HID
- * device. Without the Input Monitoring permission macOS refuses, and the library then calls
- * exit(1): the viewer quits, no crash report. It does so whenever the viewer loses or gets the
- * focus (Viewer.focusLost/focusGained: opening any dialog), on the BMC's LED reports, and in
+ * device, which macOS allows only with a permission (Input Monitoring); refused, the library
+ * calls exit(1): the viewer quits, no crash report. It does so whenever the viewer loses or gets
+ * the focus (Viewer.focusLost/focusGained: opening any dialog), on the BMC's LED reports, and in
  * keyboardAction for the lock keys (USB 57 CapsLock, 83 NumLock, 71 ScrollLock): it sends their
  * state, from the local LED, as the key (57: LED on, 0xff39: LED off).
  *
- * With the permission (the launcher app checks it and passes macLed=native) everything goes to
- * the library unchanged. Without it (ledFallback): no LED calls at all, and a lock key gets its
- * state from Java instead: off as the library sends it (0xff00 added), on with 0x10000 added,
- * which keeps the library from reading the LED (it only does for exactly 57/71/83), and which
- * the BMC gets as 0x00010039 (the library sends the key as 32 bits; for the BMC it's 57).
+ * So on macOS the library gets no LED calls at all (the permission isn't asked for: it had to be
+ * granted again after every update of the app, and gave only the Mac's LEDs following the
+ * remote's), and a lock key gets its state from Java instead: off as the library sends it
+ * (0xff00 added), on with 0x10000 added, which keeps the library from reading the LED (it only
+ * does for exactly 57/71/83), and which the BMC gets as 0x00010039 (the library sends the key as
+ * 32 bits; for the BMC it's 57).
  *
  * Linux: changeLEDstate (the BMC reported LEDs other than the local ones; the viewer got the
  * focus) sets the local lock state by typing the lock key (XTestFakeKeyEvent, libiKVM64.so). That
@@ -29,10 +30,33 @@ import java.security.PrivilegedAction;
  * (CapsLock seemed to work every second time, depending on when the remote reports its LEDs). The
  * time and key are noted here; KeyFix drops that lock key's press and release right after
  * (syncKey), as it does Windows' own (isCapsSyncKey).
+ *
+ * CapsLock goes as the library sends it (macOS: the state from Java, see lockKey): one code per
+ * toggle, 0x39 (on) or 0xff39 (off), not a press and a release. Tried and dropped: both codes per
+ * press, "on" then "off" per press (each left a Linux text console or an X desktop stuck on), and
+ * a menu to toggle a lock (back to back, the BMC took only the first code: it could only turn a
+ * lock on). The BMC sends no LED reports, so the remote's lock state can't be known.
  */
 public final class Native {
-    /** Set by the agent before the viewer class is defined. */
-    static volatile boolean ledFallback;
+    /** macOS: no LED calls to the library (see above). */
+    private static final boolean NO_LED = Config.MAC;
+    /**
+     * Simplify Caps Lock (KeyPasta Preferences; Windows, Linux): as on macOS, no LED calls at all
+     * (no reading, no syncing the local LEDs to the remote's) and CapsLock sent once per press,
+     * with the local state from Java (on with 0x10000 added, which keeps the library from reading
+     * the LED, off with 0xff00). Without: Windows' and Linux's libraries send it by the local LED,
+     * a Linux text console lost every second CapsLock (Windows sends a press and a release).
+     */
+    static volatile boolean simpleCaps;
+    /** CapsLock pressed (down 1) and not released yet: its repeats send nothing. The viewer sends
+     *  Windows' and Linux's lock keys as other keys (RemoteVideo.QueryOS < 2: in its "stable"
+     *  keyboard mode a whole key, down 2, at the release; held, down 1, then 0), macOS' as one
+     *  whole key per event. */
+    private static boolean capsHeld;
+
+    private static boolean noLed() {
+        return NO_LED || simpleCaps;
+    }
     private static int numLockTaps;
     private static volatile Method keyboardAction, changeLEDstate, getLEDstate, setLEDstate;
     /** Linux: the lock key the viewer's LED sync typed last, and when (see changeLEDstate). */
@@ -54,14 +78,25 @@ public final class Native {
 
     public static void keyboardAction(Object viewer, int virtualKey, int scanKey, int extended, int down,
                                       int numLock, int capsLock, int scrollLock) {
-        if (ledFallback)
+        if (scanKey == 57 && simpleCaps && !NO_LED) {
+            // down: 2 a whole key, 1 pressed (held), 0 released: once per press, as a whole key
+            boolean send;
+            synchronized (Native.class) {
+                send = down == 2 || (down == 1 && !capsHeld);
+                capsHeld = down == 1;
+            }
+            if (send)
+                call(method(viewer, "keyboardAction"), viewer, virtualKey, lockKey(57), extended, 2, numLock, capsLock, scrollLock);
+            return;
+        }
+        if (NO_LED)
             scanKey = lockKey(scanKey);
         call(method(viewer, "keyboardAction"), viewer, virtualKey, scanKey, extended, down, numLock, capsLock, scrollLock);
     }
 
     public static void changeLEDstate(Object viewer, int virtualKey, int scanKey, int extended, int down,
                                       int numLock, int capsLock, int scrollLock) {
-        if (ledFallback)
+        if (noLed())
             return;
         if (Config.LINUX) {
             int vk = scanKey == 57 ? KeyEvent.VK_CAPS_LOCK : scanKey == 83 ? KeyEvent.VK_NUM_LOCK
@@ -76,13 +111,13 @@ public final class Native {
     }
 
     public static int getLEDstate(Object viewer) {
-        if (ledFallback)
+        if (noLed())
             return 0;
         return (Integer) call(method(viewer, "getLEDstate"), viewer);
     }
 
     public static void setLEDstate(Object viewer) {
-        if (ledFallback)
+        if (noLed())
             return;
         call(method(viewer, "setLEDstate"), viewer);
     }
