@@ -68,6 +68,7 @@ final class About {
         item(s, "Firmware update: the login popup is filled with the BMC's saved ID and password.");
         item(s, "Removing a system also removes its saved ID and password (account.properties).");
         item(s, "The note after saving the configuration (and the Configuration tip) shows its folder with the dots in it.");
+        item(s, "All settings files in IPMIView's settings folder (when it has one), none in its program folder.");
         item(s, "Sensors tab opens in the text view, with a \"Clear Chassis Intrusion\" button.");
         item(s, "No lookup of the computer's own address for every BMC connection and packet (faster first login).");
         item(s, "Faster console launch: no fixed 4 seconds waiting for the tunnel"

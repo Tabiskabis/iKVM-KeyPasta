@@ -374,6 +374,40 @@ final class Patch {
         return text != null ? text : out;
     }
 
+    /**
+     * IPMIView's settings files opened by name go to its settings folder (see SettingsFolder):
+     * ConfigAccessor's File and FileReader, the others' FileReader and FileWriter become
+     * SettingsFolder's, their File.exists/isFile/createNewFile calls SettingsFolder's.
+     */
+    static byte[] redirectSettingsFolder(byte[] cf, String name) {
+        byte[] out = cf;
+        boolean changed = false;
+        String[][] renames = "IPMIView20/ConfigAccessor".equals(name)
+            ? new String[][] {{"java/io/File", "keypasta/SettingsFolder$Folder"}, {"java/io/FileReader", "keypasta/SettingsFolder$Reader"}}
+            : new String[][] {{"java/io/FileReader", "keypasta/SettingsFolder$Reader"}, {"java/io/FileWriter", "keypasta/SettingsFolder$Writer"}};
+        for (String[] r : renames) {
+            byte[] renamed = renameClass(out == cf ? cf.clone() : out, r[0], r[1]);
+            if (renamed != null) {
+                out = renamed;
+                changed = true;
+            }
+        }
+        if (!"IPMIView20/ConfigAccessor".equals(name)) {
+            try {
+                byte[] redirected = redirect(out == cf ? cf.clone() : out, new String[][] {{"java/io/File", "exists", "()Z"},
+                    {"java/io/File", "isFile", "()Z"}, {"java/io/File", "createNewFile", "()Z"}},
+                    "keypasta/SettingsFolder", "settings file checks");
+                if (redirected != null) {
+                    out = redirected;
+                    changed = true;
+                }
+            } catch (Throwable t) {
+                Log.d("settings file check redirect skipped: " + t);
+            }
+        }
+        return changed ? out : null;
+    }
+
     /** IPMIView's UDP classes: InetAddress.getLocalHost becomes LocalHost.getLocalHost (see LocalHost). */
     static byte[] redirectLocalHost(byte[] cf) {
         try {

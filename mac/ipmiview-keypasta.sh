@@ -8,8 +8,8 @@
 #
 # Changes in the IPMIView folder: renames the Linux Java folder jre to jre-linux, adds
 # BMCSecurity/mac/ (stunnel wrapper, stunnel.conf) and proxy_ip=127.0.0.1 in stunnel.properties. stunnel's log: /tmp/iKVM-KeyPasta-stunnel.log
-# IPMIView runs in ~/Library/Application Support/IPMIView (its settings: IPMIView.properties,
-# account.properties).
+# IPMIView's settings (IPMIView.properties, account.properties, ...) are kept in
+# ~/Library/Application Support/IPMIView.
 
 # Settings
 IPMIVIEW="${1:-${IPMIVIEW:-$HOME/.local/bin/IPMIView_2.25.0_build.260709_bundleJRE_Linux_x64}}"
@@ -118,28 +118,22 @@ if [ -n "${KEYPASTA_LAUNCHER:-}" ] && [ -x "$KEYPASTA_LAUNCHER" ] && [ -f "$NAME
     fi
 fi
 
-# IPMIView keeps its settings (IPMIView.properties: the BMC list; account.properties) and whatever
-# else it writes in its working folder. That's ~/Library/Application Support/IPMIView, not the
-# IPMIView folder: the settings survive an IPMIView update. Everything of the IPMIView folder is
-# linked in there (IPMIView finds its files relative to the working folder: BMCSecurity/,
-# stunnel.properties, iKVM.jar, ...), the links made again on every start (the folder may have
-# moved). Settings already in the IPMIView folder move over once. Not $XDG_CONFIG_HOME: the app
-# sets it for IcedTea-Web's own profile.
+# IPMIView's settings (IPMIView.properties: the BMC list; account.properties: saved logins; a few
+# more) go to ~/Library/Application Support/IPMIView, not the IPMIView folder: they survive an
+# IPMIView update. IPMIView runs in its folder (it finds its files relative to the folder it runs
+# in) and gets the settings folder as its second argument; the agent sends the settings files
+# IPMIView opens by bare name there too (KEYPASTA_IPMIVIEW_SETTINGS, see SettingsFolder). A
+# settings file missing there is copied from the IPMIView folder as a starting point. Not
+# $XDG_CONFIG_HOME: the app sets it for IcedTea-Web's own profile.
 DATA="$HOME/Library/Application Support/IPMIView"
 mkdir -p "$DATA" || fail "Couldn't create $DATA."
-for f in IPMIView.properties account.properties; do
-    if [ -f "$IPMIVIEW/$f" ] && [ ! -L "$IPMIVIEW/$f" ] && [ ! -e "$DATA/$f" ]; then
-        mv "$IPMIVIEW/$f" "$DATA/$f" && echo "Moved $IPMIVIEW/$f to $DATA."
-    fi
+find "$DATA" -maxdepth 1 -type l -exec rm -f {} + 2>/dev/null   # links of the earlier way
+for f in IPMIView.properties account.properties email.properties language.properties proxy.properties \
+        smcrakp.properties sort.properties timeout.properties update.properties version.properties; do
+    [ -f "$IPMIVIEW/$f" ] && [ ! -e "$DATA/$f" ] && cp -p "$IPMIVIEW/$f" "$DATA/$f"
 done
-find "$DATA" -maxdepth 1 -type l -exec rm -f {} + 2>/dev/null
-for e in "$IPMIVIEW"/* "$IPMIVIEW"/.[!.]*; do
-    [ -e "$e" ] || continue
-    name="${e##*/}"
-    [ -e "$DATA/$name" ] || ln -s "$e" "$DATA/$name"
-done
-cd "$DATA" || exit 1
+export KEYPASTA_IPMIVIEW_SETTINGS="$DATA/"
 
 # IPMIView20.lax's class path. Its menus in the Mac's menu bar, as Mac apps have
 # them (only IPMIView: the viewers it starts keep theirs in the window)
-exec java -Xmx512m -Dapple.laf.useScreenMenuBar=true -cp "$IPMIVIEW/iKVM.jar:$IPMIVIEW/IPMIView20.jar:$IPMIVIEW/TrapView.jar:$IPMIVIEW/JViewerX9.jar:$IPMIVIEW/lax.jar" IPMIView20.IPMIView20
+exec java -Xmx512m -Dapple.laf.useScreenMenuBar=true -cp "$IPMIVIEW/iKVM.jar:$IPMIVIEW/IPMIView20.jar:$IPMIVIEW/TrapView.jar:$IPMIVIEW/JViewerX9.jar:$IPMIVIEW/lax.jar" IPMIView20.IPMIView20 - "$DATA/"

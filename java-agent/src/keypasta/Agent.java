@@ -104,7 +104,14 @@ public final class Agent {
                     if (delete != null)
                         out = delete;
                     byte[] note = Patch.redirectConfigNote(out != null ? out : bytes);   // its folder with its dots (ConfigNote)
-                    return note != null ? note : out;
+                    if (note != null)
+                        out = note;
+                    SettingsFolder.loader = loader;
+                    byte[] settings = Patch.redirectSettingsFolder(out != null ? out : bytes, name);   // all settings in its folder
+                    return settings != null ? settings : out;
+                }
+                if ("IPMIView20/ConfigAccessor".equals(name) || "IPMIView20/update/CheckUpdate".equals(name)) {
+                    return Patch.redirectSettingsFolder(bytes, name);   // its settings files in IPMIView's settings folder (SettingsFolder)
                 }
                 if ("IPMIView20/iKVMLunchar".equals(name)) {
                     // timed (see LaunchTiming); the viewer's settings not in a file (see KvmSettings)
