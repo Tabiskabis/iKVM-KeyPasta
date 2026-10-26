@@ -3,12 +3,13 @@
 # (IPMIView.desktop, see install.sh) and as the command ipmiview.
 #
 # IPMIView keeps its settings (IPMIView.properties: the BMC list; account.properties: saved IDs
-# and passwords; a few more) in the folder it runs in. If you may write to IPMIView's folder (or
-# you're root), it runs there. Otherwise (installed for all users) it runs in ~/.config/ipmiview,
-# which links to everything in IPMIView's folder (it finds its files relative to the folder it
-# runs in), except the settings files: those are your own. On the first start, the folder's
-# settings files are copied as your starting point (e.g. a BMC list set up there), except
-# account.properties (passwords are personal). The links are made again on every start.
+# and passwords; a few more) in the folder it runs in. It runs in ~/.config/ipmiview (under
+# $XDG_CONFIG_HOME), the same for every IPMIView version, and IPMIView's own folder stays as
+# unpacked. That folder links to everything in IPMIView's folder (it finds its files relative to
+# the folder it runs in), except the settings files (*.properties): those are your own. A settings
+# file missing there is copied from IPMIView's folder as a starting point (e.g. a BMC list set up
+# there), account.properties (saved passwords) only from an IPMIView folder of your own. The links
+# are made again on every start.
 #
 #   ipmiview-keypasta.sh [-d|--debug] [IPMIView folder]     (install.sh links it as ipmiview)
 #
@@ -17,13 +18,14 @@
 #                 and the log is shown here as it grows, next to IPMIView's own output. The log
 #                 of the run before: agent.log.old.
 #
-# IPMIView folder: the argument, else $IPMIVIEW, else the one install.sh noted next to this
-# script (ipmiview-folder), else the first IPMIView folder found in the home
-# folder, ~/.local/bin, ~/Applications, /opt or /usr/local. The agent: next to this script (not
-# next to a link to it).
+# IPMIView folder: the argument, else the newest IPMIView* folder (by the version in its name;
+# of equal names, the one in the place listed first) in ~/.local/share, ~/.local/lib,
+# ~/.local/bin, ~/Applications/IPMIView, ~/Applications, /opt/SUPERMICRO, /opt, /usr/local/share
+# or /usr/share. So a new version is used as soon as its download is unpacked into one of them
+# (e.g. tar -xzf IPMIView_<version>_Linux_x64.tar.gz -C ~/.local/share). The agent: next to this
+# script (not next to a link to it).
 
 HERE="$(dirname "$(readlink -f "$0")")"
-NOTED="$HERE/ipmiview-folder"
 AGENT="$HERE/iKVM-KeyPasta-agent.jar"
 
 fail() {
@@ -32,11 +34,19 @@ fail() {
     exit 1
 }
 
-find_ipmiview() {
-    local d
-    for d in "$HOME"/IPMIView* "$HOME"/.local/bin/IPMIView* "$HOME"/Applications/IPMIView* /opt/IPMIView* /usr/local/IPMIView*; do
-        [ -f "$d/IPMIView20.jar" ] && { echo "$d"; return; }
-    done
+# The newest IPMIView* folder (with IPMIView20.jar) in the given places, by the version in its
+# name (from its first digit on: IPMIView_2.25 and IPMIView2.26 compare as 2.25 and 2.26); of equal
+# versions, the one in the place given first. (install.sh has the same.)
+newest_ipmiview() {
+    local i=0 place d n
+    for place in "$@"; do
+        i=$((i + 1))
+        for d in "$place"/IPMIView*; do
+            [ -f "$d/IPMIView20.jar" ] || continue
+            n="${d##*/}"
+            printf '%s\t%d\t%s\n' "${n#"${n%%[0-9]*}"}" "$i" "$d"
+        done
+    done | sort -t "$(printf '\t')" -k1,1V -k2,2nr | tail -n 1 | cut -f 3-
 }
 
 DEBUG=false
@@ -50,10 +60,11 @@ for arg in "$@"; do
     esac
 done
 
-[ -z "$FOLDER" ] && [ -z "${IPMIVIEW:-}" ] && [ -f "$NOTED" ] && IPMIVIEW="$(head -n 1 "$NOTED")"
-IPMIVIEW="${FOLDER:-${IPMIVIEW:-$(find_ipmiview)}}"
+IPMIVIEW="$FOLDER"
+[ -n "$IPMIVIEW" ] || IPMIVIEW="$(newest_ipmiview "$HOME/.local/share" "$HOME/.local/lib" "$HOME/.local/bin" \
+    "$HOME/Applications/IPMIView" "$HOME/Applications" /opt/SUPERMICRO /opt /usr/local/share /usr/share)"
 [ -n "$IPMIVIEW" ] && [ -f "$IPMIVIEW/IPMIView20.jar" ] \
-    || fail "IPMIView not found${IPMIVIEW:+ in $IPMIVIEW}. Give its folder: ipmiview-keypasta.sh <folder>"
+    || fail "IPMIView not found${FOLDER:+ in $FOLDER}. Unpack its download (IPMIView_<version>_Linux_x64.tar.gz) into ~/.local/share, or give its folder: ipmiview <folder>"
 [ -x "$IPMIVIEW/IPMIView20" ] || fail "$IPMIVIEW/IPMIView20 missing or not executable."
 
 # The log: in the user's state folder, unless its path has a space or comma (JAVA_TOOL_OPTIONS
@@ -76,23 +87,20 @@ else
     LOG=""
 fi
 
-cd "$IPMIVIEW" || exit 1
-if [ "$(id -u)" != 0 ] && [ ! -w "$IPMIVIEW" ]; then
-    WORK="${XDG_CONFIG_HOME:-$HOME/.config}/ipmiview"
-    mkdir -p "$WORK" || fail "Can't create $WORK for IPMIView's settings."
-    find "$WORK" -maxdepth 1 -type l -exec rm -f {} + 2>/dev/null
-    for e in "$IPMIVIEW"/* "$IPMIVIEW"/.[!.]*; do
-        [ -e "$e" ] || continue
-        name="${e##*/}"
-        [ -e "$WORK/$name" ] && continue
-        case "$name" in
-            account.properties) ;;
-            *.properties) cp "$e" "$WORK/$name" ;;
-            *) ln -s "$e" "$WORK/$name" ;;
-        esac
-    done
-    cd "$WORK" || exit 1
-fi
+WORK="${XDG_CONFIG_HOME:-$HOME/.config}/ipmiview"
+mkdir -p "$WORK" || fail "Can't create $WORK for IPMIView's settings."
+find "$WORK" -maxdepth 1 -type l -exec rm -f {} + 2>/dev/null
+for e in "$IPMIVIEW"/* "$IPMIVIEW"/.[!.]*; do
+    [ -e "$e" ] || continue
+    name="${e##*/}"
+    [ -e "$WORK/$name" ] && continue
+    case "$name" in
+        account.properties) [ -O "$IPMIVIEW" ] && cp -p "$e" "$WORK/$name" ;;
+        *.properties) cp -p "$e" "$WORK/$name" ;;
+        *) ln -s "$e" "$WORK/$name" ;;
+    esac
+done
+cd "$WORK" || exit 1
 if [ -z "$LOG" ]; then
     exec ./IPMIView20
 fi

@@ -67,6 +67,7 @@ final class About {
         item(s, "Login view: an eye button shows the saved password.");
         item(s, "Firmware update: the login popup is filled with the BMC's saved ID and password.");
         item(s, "Removing a system also removes its saved ID and password (account.properties).");
+        item(s, "The note after saving the configuration (and the Configuration tip) shows its folder with the dots in it.");
         item(s, "Sensors tab opens in the text view, with a \"Clear Chassis Intrusion\" button.");
         item(s, "No lookup of the computer's own address for every BMC connection and packet (faster first login).");
         item(s, "Faster console launch: no fixed 4 seconds waiting for the tunnel"

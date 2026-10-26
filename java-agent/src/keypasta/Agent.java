@@ -101,7 +101,10 @@ public final class Agent {
                     if (quit != null)
                         out = quit;
                     byte[] delete = Patch.redirectDeviceDelete(out != null ? out : bytes);   // its account too (IPMIViewLogin)
-                    return delete != null ? delete : out;
+                    if (delete != null)
+                        out = delete;
+                    byte[] note = Patch.redirectConfigNote(out != null ? out : bytes);   // its folder with its dots (ConfigNote)
+                    return note != null ? note : out;
                 }
                 if ("IPMIView20/iKVMLunchar".equals(name)) {
                     // timed (see LaunchTiming); the viewer's settings not in a file (see KvmSettings)

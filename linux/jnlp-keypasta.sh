@@ -44,7 +44,8 @@ for arg in "$@"; do
 done
 if [ -z "$JNLP" ]; then
     DOWNLOADS="$(xdg-user-dir DOWNLOAD 2>/dev/null)"
-    DOWNLOADS="${DOWNLOADS:-$HOME/Downloads}"
+    # xdg-user-dir answers $HOME when no Downloads folder is set
+    case "$DOWNLOADS" in ""|"$HOME"|"$HOME/") DOWNLOADS="$HOME/Downloads" ;; esac
     # the newest: browsers save another launch.jnlp as "launch (1).jnlp" and so on
     JNLP="$DOWNLOADS/launch.jnlp"
     for f in "$DOWNLOADS"/launch*.jnlp; do

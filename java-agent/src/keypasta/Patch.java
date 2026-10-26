@@ -303,6 +303,77 @@ final class Patch {
         }
     }
 
+    /**
+     * Every String constant (what ldc pushes) equal to from becomes to, a Utf8 entry added for it.
+     * Null: no such constant.
+     */
+    static byte[] replaceString(byte[] b, String from, String to) {
+        try {
+            int cpCount = u2(b, 8);
+            int p = 10;
+            String[] utf8 = new String[cpCount];
+            int[] tag = new int[cpCount], at = new int[cpCount];
+            for (int i = 1; i < cpCount; i++) {
+                int t = b[p++] & 0xFF;
+                tag[i] = t;
+                switch (t) {
+                    case 1: { int len = u2(b, p); utf8[i] = new String(b, p + 2, len, "UTF-8"); p += 2 + len; break; }
+                    case 7: case 8: at[i] = p; p += 2; break;
+                    case 16: case 19: case 20: p += 2; break;
+                    case 15: p += 3; break;
+                    case 3: case 4: case 9: case 10: case 11: case 12: case 17: case 18: p += 4; break;
+                    case 5: case 6: p += 8; i++; break;
+                    default: return null;
+                }
+            }
+            int cpEnd = p;
+            int added = cpCount;                            // the new text's index
+            int changed = 0;
+            for (int i = 1; i < cpCount; i++)
+                if (tag[i] == 8 && from.equals(utf8[u2(b, at[i])])) {
+                    b[at[i]] = (byte) (added >> 8);
+                    b[at[i] + 1] = (byte) added;
+                    changed++;
+                }
+            if (changed == 0)
+                return null;
+            java.io.ByteArrayOutputStream extra = new java.io.ByteArrayOutputStream();
+            java.io.DataOutputStream out = new java.io.DataOutputStream(extra);
+            out.writeByte(1);
+            out.writeUTF(to);
+            out.flush();
+            byte[] add = extra.toByteArray();
+            byte[] r = new byte[b.length + add.length];
+            System.arraycopy(b, 0, r, 0, cpEnd);
+            r[8] = (byte) ((cpCount + 1) >> 8);
+            r[9] = (byte) (cpCount + 1);
+            System.arraycopy(add, 0, r, cpEnd, add.length);
+            System.arraycopy(b, cpEnd, r, cpEnd + add.length, b.length - cpEnd);
+            Log.d("text \"" + from.trim() + "\" corrected in " + utf8[u2(b, at[u2(b, cpEnd + 2)])]);
+            return r;
+        } catch (Exception e) {
+            Log.d("text correction skipped: " + e);
+            return null;
+        }
+    }
+
+    /**
+     * IPMIView20's String.replaceAll calls become ConfigNote.replaceAll, and its note's "has been
+     * save to" becomes "has been saved to" (see ConfigNote).
+     */
+    static byte[] redirectConfigNote(byte[] cf) {
+        byte[] out = null;
+        try {
+            out = redirect(cf.clone(), new String[][] {{"java/lang/String", "replaceAll",
+                "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;"}}, "keypasta/ConfigNote", "settings folder in notes");
+        } catch (Throwable t) {
+            Log.d("settings folder in notes redirect skipped: " + t);
+        }
+        byte[] text = replaceString(out != null ? out : cf.clone(), " The configuration file has been save to",
+            " The configuration file has been saved to");
+        return text != null ? text : out;
+    }
+
     /** IPMIView's UDP classes: InetAddress.getLocalHost becomes LocalHost.getLocalHost (see LocalHost). */
     static byte[] redirectLocalHost(byte[] cf) {
         try {
