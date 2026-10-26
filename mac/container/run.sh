@@ -4,7 +4,9 @@
 # or Podman (its own podman command, which takes docker's commands).
 #
 #   ./run.sh [options]
-#     --ipmiview DIR   IPMIView folder (has IPMIView20.jar). Default: auto-detected.
+#     --ipmiview DIR   IPMIView folder (has IPMIView20.jar). Default: the newest IPMIView* in the
+#                      first of ~/.local/share, ~/.local/bin, ~/Applications, /opt, /Applications
+#                      that has one.
 #     --agent JAR      iKVM-KeyPasta agent jar.             Default: auto-detected.
 #     --vmedia-dir DIR any folder with ISO/IMG files for virtual media; read-only at /root/vMedia.
 #                      Default: none.
@@ -99,13 +101,25 @@ if ! reachable; then
     echo "Engine ready."
 fi
 
+# The IPMIView folder (with IPMIView20.jar): the first of these places that has one, there the
+# newest (by the version in its name, from its first digit on; also one folder down, e.g.
+# ~/Applications/IPMIView/IPMIView_2.25.0_...). Same order as the app (Model.ipmiviewPlaces).
+find_ipmiview() {
+    local place d best
+    for place in "$HOME/.local/share" "$HOME/.local/bin" "$HOME/Applications" /opt /Applications; do
+        best="$(for d in "$place"/IPMIView* "$place"/IPMIView*/*; do
+                [ -f "$d/IPMIView20.jar" ] || continue
+                printf '%s\t%s\n' "$(printf '%s\n' "${d##*/}" | sed 's/^[^0-9]*//' \
+                    | awk -F '[^0-9]+' '{ for (i = 1; i <= NF; i++) if ($i != "") printf "%010d.", $i; print "" }')" "$d"
+            done | sort | tail -n 1 | cut -f 2-)"
+        [ -n "$best" ] && { printf '%s\n' "$best"; return 0; }
+    done
+    return 1
+}
+
 # IPMIView is only needed for IPMIView mode; a .jnlp runs the BMC's own viewer, no IPMIView required.
 if [ -z "$JNLP" ]; then
-    if [ -z "$IPMIVIEW" ]; then
-        for d in "$HOME"/.local/bin/IPMIView* /Applications/IPMIView* "$HOME"/IPMIView* /opt/IPMIView*; do
-            [ -f "$d/IPMIView20.jar" ] && { IPMIVIEW="$d"; break; }
-        done
-    fi
+    [ -n "$IPMIVIEW" ] || IPMIVIEW="$(find_ipmiview)" || true
     [ -n "$IPMIVIEW" ] && [ -f "$IPMIVIEW/IPMIView20.jar" ] || {
         echo "No IPMIView found. Either install IPMIView, or open your BMC's .jnlp instead (--jnlp FILE)." >&2; exit 1; }
 fi

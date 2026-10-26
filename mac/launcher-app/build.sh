@@ -1,10 +1,24 @@
 #!/bin/bash
 # Build "IPMIView KeyPasta.app" from IPMIViewKeyPasta.swift.
 # Needs the Xcode Command Line Tools (xcode-select --install) — no full Xcode.
+#
+#   ./build.sh             build it here (mac/launcher-app/)
+#   ./build.sh --install   then put it in /Applications (~/Applications if /Applications isn't
+#                          writable for you): an app already there goes to the Trash first. No
+#                          admin rights needed (admins may write /Applications; else your own).
 
 # The app's version: APP_VERSION, then the version of the agent jar it bundles (its manifest)
 # without its last number, which is always 0 (agent 3.0.0 -> app 1.3.0).
 APP_VERSION=1
+
+INSTALL=false
+for arg in "$@"; do
+    case "$arg" in
+        --install) INSTALL=true ;;
+        -h|--help) sed -n '2,/^$/s/^# \{0,1\}//p' "$0"; exit 0 ;;
+        *) echo "Unknown option $arg (--install: build, then install)" >&2; exit 1 ;;
+    esac
+done
 
 set -e
 cd "$(dirname "$0")"
@@ -27,7 +41,12 @@ VER="$APP_VERSION.${AGENT_VER%.*}"
 command -v swiftc >/dev/null || { echo "swiftc not found. Run: xcode-select --install" >&2; exit 1; }
 command -v clang >/dev/null || { echo "clang not found. Run: xcode-select --install" >&2; exit 1; }
 
-rm -rf "$APP"
+# Oldest macOS it runs on: 13 (Ventura; SwiftUI's Window scene and windowResizability). Built for
+# that, whatever macOS builds it, and universal (Apple silicon and Intel).
+MIN_MACOS=13.0
+ARCHS="arm64 x86_64"
+
+rm -rf "$APP" build-arch
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
 cat > "$APP/Contents/Info.plist" <<PLIST
@@ -42,7 +61,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundlePackageType</key>     <string>APPL</string>
     <key>CFBundleShortVersionString</key> <string>$VER</string>
     <key>CFBundleVersion</key>         <string>$VER</string>
-    <key>LSMinimumSystemVersion</key>  <string>11.0</string>
+    <key>LSMinimumSystemVersion</key>  <string>$MIN_MACOS</string>
     <key>NSHighResolutionCapable</key> <true/>
     <key>CFBundleIconFile</key>        <string>AppIcon</string>
     <key>NSLocalNetworkUsageDescription</key>
@@ -61,9 +80,15 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-echo "Compiling…"
-swiftc -O -parse-as-library -o "$APP/Contents/MacOS/$EXEC" IPMIViewKeyPasta.swift \
-    -framework SwiftUI -framework AppKit
+mkdir -p build-arch
+for arch in $ARCHS; do
+    echo "Compiling ($arch, macOS $MIN_MACOS and newer)…"
+    swiftc -O -parse-as-library -target "$arch-apple-macos$MIN_MACOS" -o "build-arch/$EXEC-$arch" \
+        IPMIViewKeyPasta.swift -framework SwiftUI -framework AppKit
+done
+lipo -create -output "$APP/Contents/MacOS/$EXEC" $(for arch in $ARCHS; do echo "build-arch/$EXEC-$arch"; done)
+rm -rf build-arch
+lipo -info "$APP/Contents/MacOS/$EXEC"
 
 # Bundle the launcher script.
 cp "$MAC/ipmiview-keypasta.sh" "$APP/Contents/Resources/ipmiview-keypasta.sh"
@@ -72,7 +97,7 @@ chmod +x "$APP/Contents/Resources/ipmiview-keypasta.sh"
 # like the viewer's Java (Rosetta 2)
 cp "$MAC/java-name.sh" "$APP/Contents/Resources/java-name.sh"
 chmod +x "$APP/Contents/Resources/java-name.sh"
-clang -arch x86_64 -O2 -Wall -o "$APP/Contents/Resources/java-launcher" java-launcher.c -lobjc
+clang -arch x86_64 -mmacosx-version-min="$MIN_MACOS" -O2 -Wall -o "$APP/Contents/Resources/java-launcher" java-launcher.c -lobjc
 cp -R "$MAC/container" "$APP/Contents/Resources/container"
 chmod +x "$APP/Contents/Resources/container/run.sh" "$APP/Contents/Resources/container/entrypoint.sh"
 # Bundle the agent jar (found above)
@@ -95,4 +120,41 @@ codesign --force --sign - --timestamp=none "$APP"
 codesign --verify --strict "$APP" || { echo "codesign verify failed" >&2; exit 1; }
 
 echo "Built: $(pwd)/$APP"
-echo "Move it to /Applications and open it (right-click → Open the first time)."
+if ! $INSTALL; then
+    echo "Move it to /Applications and open it (right-click → Open the first time), or run ./build.sh --install."
+    exit 0
+fi
+
+# --install: /Applications if you may write there (admins may), else ~/Applications
+DEST=/Applications
+[ -w "$DEST" ] || DEST="$HOME/Applications"
+mkdir -p "$DEST"
+OLD="$DEST/$APP"
+[ "$DEST" = "$HOME/Applications" ] && [ -e "/Applications/$APP" ] \
+    && echo "Note: /Applications/$APP stays (not writable for you); the new one goes to $DEST." >&2
+if [ -e "$OLD" ]; then
+    # still running: it keeps running from the Trash until quit
+    pgrep -f "$OLD/Contents/MacOS/$EXEC" >/dev/null 2>&1 \
+        && echo "The installed app is running: quit it and open it again to use the new one." >&2
+    # to the Trash (Put Back works): macOS 15's trash command, else the Finder (it may ask once
+    # whether Terminal may control it), else moved into ~/.Trash under a free name
+    if [ -x /usr/bin/trash ] && /usr/bin/trash "$OLD" 2>/dev/null; then
+        :
+    elif osascript -e 'on run argv' -e 'tell application "Finder" to delete (POSIX file (item 1 of argv) as alias)' \
+            -e 'end run' "$OLD" >/dev/null 2>&1; then
+        :
+    else
+        T="$HOME/.Trash/$APP"
+        n=1
+        while [ -e "$T" ]; do n=$((n + 1)); T="$HOME/.Trash/IPMIView KeyPasta $n.app"; done
+        mv "$OLD" "$T" || { echo "Couldn't move $OLD to the Trash: the new app stays in $(pwd)." >&2; exit 1; }
+    fi
+    [ -e "$OLD" ] && { echo "$OLD is still there: the new app stays in $(pwd)." >&2; exit 1; }
+    echo "Moved the previous app to the Trash."
+fi
+mv "$APP" "$OLD"
+# Launch Services: the new app (its version, .jnlp files) right away
+LSREGISTER=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+[ -x "$LSREGISTER" ] && "$LSREGISTER" -f "$OLD" >/dev/null 2>&1 || true
+echo "Installed: $OLD"
+echo "Open it from there (right-click → Open the first time)."

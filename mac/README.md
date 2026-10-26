@@ -6,7 +6,8 @@ Not part of the release, use at your own risk. How it works and why: [DOCUMENTAT
 
 ## What you need
 
-- IPMIView for Linux (x64) from Supermicro's website, unpacked anywhere.
+- macOS 13 (Ventura) or newer, on Apple silicon or Intel: the app is built for both. **Only tested on macOS 27:** nothing on the Mac (app, scripts, container) has been tried on earlier versions.
+- IPMIView for Linux (x64) from Supermicro's website, unpacked into `~/.local/share` (or `~/.local/bin`, `~/Applications`, `/opt`, `/Applications`: searched in that order, the newest version in the first place that has one). Anywhere else: choose its folder in Preferences › General.
 - An Intel (x86_64) Java 11 runtime, e.g. Temurin's JRE `.pkg` for macOS x64: the viewer's native libraries are Intel only (on Apple Silicon it runs through Rosetta 2).
 - [Homebrew](https://brew.sh)'s stunnel, for BMCs with encrypted KVM: `brew install stunnel`.
 - For `.jnlp` files: [OpenWebStart](https://openwebstart.com/download/).
@@ -23,7 +24,7 @@ cd mac/launcher-app
 ./build.sh
 ```
 
-Move `IPMIView KeyPasta.app` to Applications and open it (right-click › Open the first time). In its Preferences (app menu, `Cmd+,`): General sets the IPMIView folder and whether it runs natively or in a container; the Native tab the Intel Java and OpenWebStart, if not found by themselves; the Container tab where the consoles open.
+Move `IPMIView KeyPasta.app` to Applications and open it (right-click › Open the first time). Or let `./build.sh --install` do that: it puts the new app in `/Applications` (in `~/Applications` if you can't write there, no admin rights needed) and moves the one already there to the Trash. In its Preferences (app menu, `Cmd+,`): General sets the IPMIView folder and whether it runs natively or in a container; the Native tab the Intel Java and OpenWebStart, if not found by themselves; the Container tab where the consoles open.
 
 ## Use
 
@@ -52,7 +53,7 @@ Move `IPMIView KeyPasta.app` to Applications and open it (right-click › Open t
 
 - **Karabiner-Elements rules** (`karabiner/*.json` files): The `swap-fn-fkeys-*.json` Forces the F-Row keys to act as F-Keys. Use the Fn-key to use them as Media keys. The `swap-alt-cmd-*.json` files were made before the agent got the same function. Might still be useful.  
   Install: Karabiner-Elements Settings › Complex Modifications › Add your own rule, paste the file's content, Save.
-- **Without the app:** `bash ipmiview-keypasta.sh [IPMIView folder]` starts IPMIView the same way (settings at the top of the script).
+- **Without the app:** `bash ipmiview-keypasta.sh [IPMIView folder]` starts IPMIView the same way (settings at the top of the script; without a folder it searches the same places as the app).
 
 ## Known bugs
 

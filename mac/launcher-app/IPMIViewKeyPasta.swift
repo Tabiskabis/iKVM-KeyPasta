@@ -169,15 +169,28 @@ final class Model: ObservableObject {
         guard force || ipmiview.isEmpty else { return }
         let fm = FileManager.default
         func has(_ p: String) -> Bool { fm.fileExists(atPath: p + "/IPMIView20.jar") }
-        let roots = ["/Applications/IPMIView*", "\(HOME)/Applications/IPMIView*",
-                     "\(HOME)/.local/bin/IPMIView*", "/opt/IPMIView*", "\(HOME)/IPMIView*",
-                     "/opt/iKVM*/IPMIView*"]
-        for pat in roots {
-            for cand in globFiles(pat).sorted() {
-                if has(cand) { ipmiview = cand; return }
-                for sub in globFiles(cand + "/*") where has(sub) { ipmiview = sub; return }
+        // the first place that has one, there the newest (by the version in its name; also one
+        // folder down, e.g. ~/Applications/IPMIView/IPMIView_2.25.0_...). Same as the scripts'
+        // find_ipmiview (ipmiview-keypasta.sh, container/run.sh).
+        for place in Model.ipmiviewPlaces {
+            let found = (globFiles(place + "/IPMIView*") + globFiles(place + "/IPMIView*/*")).filter(has)
+            if let newest = found.max(by: { Model.versionKey($0) < Model.versionKey($1) }) {
+                ipmiview = newest
+                return
             }
         }
+    }
+
+    static let ipmiviewPlaces = [HOME + "/.local/share", HOME + "/.local/bin", HOME + "/Applications",
+                                 "/opt", "/Applications"]
+
+    // A folder's version for sorting: the numbers in its name from its first digit on, each
+    // zero-padded ("IPMIView_2.25.0_build.260709" -> "0000000002.0000000025.0000000000.0000260709.")
+    static func versionKey(_ path: String) -> String {
+        let name = (path as NSString).lastPathComponent
+        let digits = name.drop { !("0"..."9").contains($0) }
+        return digits.split { !("0"..."9").contains($0) }
+            .map { String(repeating: "0", count: max(0, 10 - $0.count)) + $0 + "." }.joined()
     }
 
     func detectIntelJava(force: Bool) {

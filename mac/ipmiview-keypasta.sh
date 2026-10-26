@@ -6,13 +6,16 @@
 #
 #   bash ipmiview-keypasta.sh [IPMIView folder]
 #
+# IPMIView folder: the argument, else $IPMIVIEW, else the newest IPMIView* in the first of
+# ~/.local/share, ~/.local/bin, ~/Applications, /opt, /Applications that has one (find_ipmiview).
+#
 # Changes in the IPMIView folder: renames the Linux Java folder jre to jre-linux, adds
 # BMCSecurity/mac/ (stunnel wrapper, stunnel.conf) and proxy_ip=127.0.0.1 in stunnel.properties. stunnel's log: /tmp/iKVM-KeyPasta-stunnel.log
 # IPMIView's settings (IPMIView.properties, account.properties, ...) are kept in
 # ~/Library/Application Support/IPMIView.
 
 # Settings
-IPMIVIEW="${1:-${IPMIVIEW:-$HOME/.local/bin/IPMIView_2.25.0_build.260709_bundleJRE_Linux_x64}}"
+IPMIVIEW="${1:-${IPMIVIEW:-}}"
 # Intel (x86_64) Java: IPMIView itself runs on any Java, but the viewer it starts (iKVM.jar) loads
 # native libraries (libiKVM64.jnilib, libSharedLibrary64.jnilib) that are x86_64 only, and quits
 # without them (on Apple Silicon an Intel Java runs through Rosetta 2)
@@ -32,7 +35,25 @@ fail() {
     exit 1
 }
 
-[ -f "$IPMIVIEW/IPMIView20.jar" ] || fail "IPMIView20.jar not found in $IPMIVIEW: adjust IPMIVIEW at the top of this file."
+# The IPMIView folder (with IPMIView20.jar): the first of these places that has one, there the
+# newest (by the version in its name, from its first digit on; also one folder down, e.g.
+# ~/Applications/IPMIView/IPMIView_2.25.0_...). Same order as the app (Model.ipmiviewPlaces).
+find_ipmiview() {
+    local place d best
+    for place in "$HOME/.local/share" "$HOME/.local/bin" "$HOME/Applications" /opt /Applications; do
+        best="$(for d in "$place"/IPMIView* "$place"/IPMIView*/*; do
+                [ -f "$d/IPMIView20.jar" ] || continue
+                printf '%s\t%s\n' "$(printf '%s\n' "${d##*/}" | sed 's/^[^0-9]*//' \
+                    | awk -F '[^0-9]+' '{ for (i = 1; i <= NF; i++) if ($i != "") printf "%010d.", $i; print "" }')" "$d"
+            done | sort | tail -n 1 | cut -f 2-)"
+        [ -n "$best" ] && { printf '%s\n' "$best"; return 0; }
+    done
+    return 1
+}
+
+[ -n "$IPMIVIEW" ] || IPMIVIEW="$(find_ipmiview)" \
+    || fail "No IPMIView found in ~/.local/share, ~/.local/bin, ~/Applications, /opt or /Applications: give its folder as argument."
+[ -f "$IPMIVIEW/IPMIView20.jar" ] || fail "IPMIView20.jar not found in $IPMIVIEW."
 [ -x "$INTEL_JAVA/bin/java" ] || fail "No Java in $INTEL_JAVA: adjust INTEL_JAVA at the top of this file."
 cd "$IPMIVIEW" || exit 1
 IPMIVIEW="$(pwd)"   # absolute (links and class path below)
