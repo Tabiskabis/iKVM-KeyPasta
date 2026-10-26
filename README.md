@@ -24,15 +24,16 @@ Extra: **`login-fix.user.js`** userscript for the BMC's login page: makes the BM
 
 Mix and match any of the core components and the windows specific parts to your liking. Where the agent or the userscript is active, the AHK script leaves that viewer alone and only adds Ctrl+Alt+Del via Ctrl+Alt+End (mimicking RDP) and Alt+Tab (Java app).
 
-### Mac app
+### Mac
 
-The iKVM-KeyPasta app is a launcher for IPMIView, including Java iKVM remote, and jnlp files from the BMC's WebUI. Both originally unsupported on macOS. Includes the Java agent.  
+**iKVM-KeyPasta.app** is a launcher for IPMIView, including Java iKVM remote, and .jnlp files from the BMC's WebUI (both originally unsupported on macOS). Includes the Java agent.  
 For Apple silicon Macs up to macOS 27 and Intel-based Macs, all components work more or less natively thanks to Rosetta. Only x86-64 Java 8 or 11 is required.  
-Alternatively, the launcher builds virtualized x86-64 containers to run the Java apps. They can be used with a VNC client or a Browser.  
+Alternatively, the launcher builds virtualized x86-64 containers to run the Java apps. They can be used with a VNC client or a Browser. Needs considerably more resources and a Docker compatible container manager.
 
 ### Linux
 
-Command line and desktop launchers for IPMIView and .jnlp files, loading the Java agent in the applications.  
+**Launchers** (CLI and Desktop) for IPMIView and .jnlp files. Load the Java agent in the applications and use standard path for IPMIView settings (usually ~/.config/ipmiview).  
+The jnlp launcher still requires OpenWebStart. IcedTea-Web support will follow.
 
 
 ## Scope
@@ -45,11 +46,79 @@ For iKVM to work with current BMC firmware, IPMIView 2.25 or newer is required: 
 ## Quick install
 
 **Windows:** run `windows\install.cmd` (requires admin elevation). It copies the available files to `%ProgramFiles%\iKVM-KeyPasta\`, registers the jnlp launcher, puts the AHK in autostart and starts it. It also creates a new shortcut in the Start menu that starts IPMIView with the Java agent as administrator.
-It asks to install AutoHotkey v2 and OpenWebStart, but does not import the userscript to your browser. Associating .jnlp files with the jnlp launcher also is a manual task (see below).
+It asks to install AutoHotkey v2 and OpenWebStart, but does not import the userscript to your browser. Associating .jnlp files with the jnlp launcher also is a manual task (see below).  
 
-**Linux:** run `bash linux/install.sh`, optionally with IPMIView's folder or its .tar.gz download. It puts IPMIView and iKVM Viewer, both with the agent, into your desktop's app menu, just for you (`--system`: for all users, asks for sudo). For a new IPMIView version, just unpack its download into `~/.local/share`: the newest one there is started. iKVM Viewer opens .jnlp files with OpenWebStart (install that first, see below); without a file it opens the launch.jnlp in your Downloads folder. With IPMIView installed for all users, everyone's BMC list and logins are kept in their own `~/.config/ipmiview`. From a terminal, `ipmiview` starts IPMIView; `--debug` shows the agent's log there (`ipmiview --debug`, `/opt/iKVM-KeyPasta/jnlp-keypasta.sh --debug file.jnlp`). `bash linux/install.sh --remove` removes it all again.
+**Linux:** run `bash linux/install.sh`, optionally with IPMIView's folder or its .tar.gz download. It puts IPMIView and iKVM Viewer, both with the agent, into your desktop's app menu, just for you (`--system`: for all users, asks for sudo). For a new IPMIView version, just unpack its download into `~/.local/share`: the newest one there is started. iKVM Viewer opens .jnlp files with OpenWebStart (install that first, see below); without a file it opens the launch.jnlp in your Downloads folder. With IPMIView installed for all users, everyone's BMC list and logins are kept in their own `~/.config/ipmiview`. From a terminal, `ipmiview` starts IPMIView; `--debug` shows the agent's log there (`ipmiview --debug`, `/opt/iKVM-KeyPasta/jnlp-keypasta.sh --debug file.jnlp`). `bash linux/install.sh --remove` removes it all again.  
 
-**macOS:** the Mac app runs IPMIView and .jnlp files with the agent, see [mac/README.md](mac/README.md). From macOS 28 on only possible in a container, which needs considerably more resources and a Docker compatible container manager.
+**macOS:** No quick install. Run `bash mac/launcher-app/build.sh` to build the app yourself. Requires JDK for the Java agent and Xcode for the Swift app).  
+
+
+## What works where
+
+| | Java app with agent | Java app, AutoHotkey only | HTML5 with userscript | HTML5, AutoHotkey only |
+|---|---|---|---|---|
+| Keys by position (plain, Shift) | ✓ | ✓ | ✓ | ✓ (ISO key `< >` as alt codes) |
+| AltGr on the remote | ✓ | ✓ | ✓ | alt codes only |
+| Dead keys, shortcuts | ✓ | ✓ | ✓ | without AltGr only |
+| Numpad decimal | ✓ | ✓ | ✓ | arrives as full stop |
+| Paste | ✓ | ✓ | ✓ | ✓ (AltGr characters as alt codes) |
+| Ctrl+Alt+Del on the remote (Ctrl+Alt+End) | with AutoHotkey | ✓ | with AutoHotkey | ✓ |
+| Alt+Tab on the remote | with AutoHotkey | ✓ | – | – |
+| Local system | Windows, Linux, macOS | Windows | any | Windows |
+
+Alt codes only type characters: they don't work for shortcuts or dead keys, on Windows not in every program, and Unicode beyond Latin-1 depends entirely on the remote.
+
+Alt codes only exist on the Linux console and on Windows:
+
+- BIOS/UEFI setup, boot loaders and Linux desktops (X11, Wayland) don't know them: safe paste types nothing there, and a normal paste leaves out the characters that aren't on the keyboard. A BIOS uses a US layout, so a normal paste there swaps y/z and garbles symbols: type such things by hand.
+- Windows only reads them with NumLock on (on the remote): with NumLock off, the numpad digits arrive as arrow keys, Home, End etc.  
+
+## Usage
+
+Type as usual. Everything only acts in iKVM windows:
+
+- Java app: windows titled `Java iKVM Viewer [...]` or `Java iKVM Viewer v1.69.44 [...]` (with the agent active, the title ends with ⌨)
+- HTML5 viewer: tabs titled `Resolution:... FPS :...` (with the userscript active, the title ends with ⌨)
+
+**Paste** types the clipboard into the remote: `Alt+Shift+V`, on macOS `⌥⇧V` or `⇧⌘V` in the Java viewer and `⇧⌘V` in the browser. Another hotkey can be set in the Java viewer's Options › KeyPasta Preferences and in the userscript's settings, a default and per BMC.
+
+- It types for the remote's keyboard layout: Swiss German, Swiss French, German or United States. By default the first of these among your local layouts, else Swiss German. Set it in the AutoHotkey tray menu ("Remote layout"), in the Java viewer's Options › KeyPasta Preferences, or in the userscript's settings. All three keep it per BMC.
+- Garbled result (the remote uses another layout)? Turn CapsLock on and paste again (safe paste): slower, but works with any layout, as everything is sent as alt codes. Turn CapsLock off again afterwards (it toggles on the remote, too).
+- Text with line breaks or AltGr characters, or with characters that aren't on the keyboard (typed slowly as Alt + number): you're asked first, fast paste, safe paste or cancel. Once the remote layout is set, only the latter are asked about, and that can be set ahead too.
+- Switching to another window or pressing Esc stops a running paste.
+- In other programs, `Alt+Shift+V` pastes plain text (AutoHotkey; can be turned off in the tray menu).
+- The userscript needs the BMC opened with `https://` (browsers give the clipboard to secure pages only), and the browser may ask for permission to read it (Firefox shows a small "Paste" button each time).
+
+**Ctrl+Alt+End** (left Alt, AutoHotkey) sends Ctrl+Alt+Del to the remote, as in Remote Desktop: the real one always goes to the local Windows. It asks first (Cancel is the default), as on a Linux console Ctrl+Alt+Del reboots the server right away. The dialog's "Don't ask again for 4 hours" turns the question off for a while; `ConfirmCtrlAltDel := false` at the top of the script turns it off for good.
+
+**Alt+Tab** in the Java app goes to the remote (AutoHotkey), like the other keys. To switch windows locally, use Win+Tab or the mouse. (The HTML5 viewer can't get it: there, Alt+Tab switches locally.)
+
+**Tray menu** (AutoHotkey):
+- Remote layout: for the BMC of the last active Java viewer
+- Remote OS: Linux console or Windows, only matters for alt codes of € and the other Windows-1252 special characters (curly quotes, dashes, ...)
+- Non-ASCII characters: ask, always include or always omit them when pasting
+- Alt+Shift+V pastes in: any window (plain text in other programs) or iKVM windows only
+- Suspend hotkeys: everything off, the iKVM windows get their original behaviour back
+
+What each part does, how and why (including what was tried and dropped) is in [DOCUMENTATION.md](DOCUMENTATION.md).
+
+### Advanced configuration
+
+**Agent options:** `-javaagent:...jar=name=value,name=value`: `paste=alt+shift+V` (the default hotkey, on macOS too; the dialog's setting wins), `pasteNonAscii=ask` (`always`, `never`), `remoteOs=linux` (`windows`), `remoteLayout=auto` (the default layout: `us`, `de-CH`, `fr-CH`, `de-DE`, `other` (alt codes); auto: Swiss German; the dialog's setting wins), `localLayout=auto` (macOS only: `de-CH`, `fr-CH`, `de-DE`, `us`; auto: the current input source), `keyDelay=2` (ms per key when pasting), `mouseRate=60` (mouse moves sent to the BMC per second at most, `0`: every one), `log=path` (debug log). Unknown options and values are ignored with a message on the console.
+
+**Agent settings** (the viewer's Options › KeyPasta Preferences, a default and per host) are kept in a plain text file, `agent.properties`, and win over the agent options. The same file works on every platform, so it can be copied or synced between users and computers:
+
+- Windows: `%AppData%\iKVM-KeyPasta\agent.properties`
+- macOS: `~/Library/Application Support/iKVM-KeyPasta/agent.properties` (the Mac app's container uses this one, too)
+- Linux: `~/.config/iKVM-KeyPasta/agent.properties` (or under `$XDG_CONFIG_HOME`)
+
+One line per setting, `name=value` for the default, `name@host=value` for a host's own, e.g. `remoteLayout@192.0.2.5=us`. `KEYPASTA_SETTINGS_DIR` sets another folder.
+
+**Userscript settings** (the extension's menu, "KeyPasta settings…", in the viewer's tab): the remote's keyboard layout (Swiss German unless set) and the paste hotkey, each a default and this BMC's own (by host), characters not on the keyboard (ask, alt codes, leave out), the remote system for alt codes (Linux console, Windows; also in the paste dialog). Kept in the extension's storage, not in the BMC's site data. `KEY_DELAY` (ms per keystroke when pasting) is at the top of the script.
+
+**AutoHotkey settings** (top of the script): `PasteHotkey`, `ConfirmCtrlAltDel`, and the paste speeds `JavaKeyDelay`, `JavaKeyPressDuration`, `HtmlKeyDelay`.
+
+**Launcher settings** (top of `iKVM-jnlp-launcher.cmd`): `JNLP` (file used when started without one), `OWS` (OpenWebStart folder), `JAVAVERSION` (Java version for the viewer, default `1.8*`, empty: as the .jnlp asks).
 
 
 ## Manual installation
@@ -136,78 +205,6 @@ The Java iKVM viewer comes either from IPMIView or as a `.jnlp` file from the BM
  * Leave "Keyboard layout" at its default (English). Surprisingly, this setting may be saved and read from the remote machine.
  * Don't set "Repeat Key timeout" to 0 ms (default 200 ms): lock keys (CapsLock, NumLock, ScrollLock) don't reach the remote then.
  * Because the AHK script captures Alt+Tab, you may want to remember what hotkey "Exit Remote Location" is bound to (default is `F2`).
-
-
-## Usage
-
-Type as usual. Everything only acts in iKVM windows:
-
-- Java app: windows titled `Java iKVM Viewer [...]` or `Java iKVM Viewer v1.69.44 [...]` (with the agent active, the title ends with ⌨)
-- HTML5 viewer: tabs titled `Resolution:... FPS :...` (with the userscript active, the title ends with ⌨)
-
-**Paste** types the clipboard into the remote: `Alt+Shift+V`, on macOS `⌥⇧V` or `⇧⌘V` in the Java viewer and `⇧⌘V` in the browser. Another hotkey can be set in the Java viewer's Options › KeyPasta Preferences and in the userscript's settings, a default and per BMC.
-
-- It types for the remote's keyboard layout: Swiss German, Swiss French, German or United States. By default the first of these among your local layouts, else Swiss German. Set it in the AutoHotkey tray menu ("Remote layout"), in the Java viewer's Options › KeyPasta Preferences, or in the userscript's settings. All three keep it per BMC.
-- Garbled result (the remote uses another layout)? Turn CapsLock on and paste again (safe paste): slower, but works with any layout, as everything is sent as alt codes. Turn CapsLock off again afterwards (it toggles on the remote, too).
-- Text with line breaks or AltGr characters, or with characters that aren't on the keyboard (typed slowly as Alt + number): you're asked first, fast paste, safe paste or cancel. Once the remote layout is set, only the latter are asked about, and that can be set ahead too.
-- Switching to another window or pressing Esc stops a running paste.
-- In other programs, `Alt+Shift+V` pastes plain text (AutoHotkey; can be turned off in the tray menu).
-- The userscript needs the BMC opened with `https://` (browsers give the clipboard to secure pages only), and the browser may ask for permission to read it (Firefox shows a small "Paste" button each time).
-
-**Ctrl+Alt+End** (left Alt, AutoHotkey) sends Ctrl+Alt+Del to the remote, as in Remote Desktop: the real one always goes to the local Windows. It asks first (Cancel is the default), as on a Linux console Ctrl+Alt+Del reboots the server right away. The dialog's "Don't ask again for 4 hours" turns the question off for a while; `ConfirmCtrlAltDel := false` at the top of the script turns it off for good.
-
-**Alt+Tab** in the Java app goes to the remote (AutoHotkey), like the other keys. To switch windows locally, use Win+Tab or the mouse. (The HTML5 viewer can't get it: there, Alt+Tab switches locally.)
-
-**Tray menu** (AutoHotkey):
-- Remote layout: for the BMC of the last active Java viewer
-- Remote OS: Linux console or Windows, only matters for alt codes of € and the other Windows-1252 special characters (curly quotes, dashes, ...)
-- Non-ASCII characters: ask, always include or always omit them when pasting
-- Alt+Shift+V pastes in: any window (plain text in other programs) or iKVM windows only
-- Suspend hotkeys: everything off, the iKVM windows get their original behaviour back
-
-### Advanced configuration
-
-**Agent options:** `-javaagent:...jar=name=value,name=value`: `paste=alt+shift+V` (the default hotkey, on macOS too; the dialog's setting wins), `pasteNonAscii=ask` (`always`, `never`), `remoteOs=linux` (`windows`), `remoteLayout=auto` (the default layout: `us`, `de-CH`, `fr-CH`, `de-DE`, `other` (alt codes); auto: Swiss German; the dialog's setting wins), `localLayout=auto` (macOS only: `de-CH`, `fr-CH`, `de-DE`, `us`; auto: the current input source), `keyDelay=2` (ms per key when pasting), `mouseRate=60` (mouse moves sent to the BMC per second at most, `0`: every one), `log=path` (debug log). Unknown options and values are ignored with a message on the console.
-
-**Agent settings** (the viewer's Options › KeyPasta Preferences, a default and per host) are kept in a plain text file, `agent.properties`, and win over the agent options. The same file works on every platform, so it can be copied or synced between users and computers:
-
-- Windows: `%AppData%\iKVM-KeyPasta\agent.properties`
-- macOS: `~/Library/Application Support/iKVM-KeyPasta/agent.properties` (the Mac app's container uses this one, too)
-- Linux: `~/.config/iKVM-KeyPasta/agent.properties` (or under `$XDG_CONFIG_HOME`)
-
-One line per setting, `name=value` for the default, `name@host=value` for a host's own, e.g. `remoteLayout@192.0.2.5=us`. `KEYPASTA_SETTINGS_DIR` sets another folder.
-
-**Userscript settings** (the extension's menu, "KeyPasta settings…", in the viewer's tab): the remote's keyboard layout (Swiss German unless set) and the paste hotkey, each a default and this BMC's own (by host), characters not on the keyboard (ask, alt codes, leave out), the remote system for alt codes (Linux console, Windows; also in the paste dialog). Kept in the extension's storage, not in the BMC's site data. `KEY_DELAY` (ms per keystroke when pasting) is at the top of the script.
-
-**AutoHotkey settings** (top of the script): `PasteHotkey`, `ConfirmCtrlAltDel`, and the paste speeds `JavaKeyDelay`, `JavaKeyPressDuration`, `HtmlKeyDelay`.
-
-**Launcher settings** (top of `iKVM-jnlp-launcher.cmd`): `JNLP` (file used when started without one), `OWS` (OpenWebStart folder), `JAVAVERSION` (Java version for the viewer, default `1.8*`, empty: as the .jnlp asks).
-
-
-## What works where
-
-| | Java app with agent | Java app, AutoHotkey only | HTML5 with userscript | HTML5, AutoHotkey only |
-|---|---|---|---|---|
-| Keys by position (plain, Shift) | ✓ | ✓ | ✓ | ✓ (ISO key `< >` as alt codes) |
-| AltGr on the remote | ✓ | ✓ | ✓ | alt codes only |
-| Dead keys, shortcuts | ✓ | ✓ | ✓ | without AltGr only |
-| Numpad decimal | ✓ | ✓ | ✓ | arrives as full stop |
-| Paste | ✓ | ✓ | ✓ | ✓ (AltGr characters as alt codes) |
-| Ctrl+Alt+Del on the remote (Ctrl+Alt+End) | with AutoHotkey | ✓ | with AutoHotkey | ✓ |
-| Alt+Tab on the remote | with AutoHotkey | ✓ | – | – |
-| Local system | Windows, Linux, macOS | Windows | any | Windows |
-
-Alt codes only type characters: they don't work for shortcuts or dead keys, on Windows not in every program, and Unicode beyond Latin-1 depends entirely on the remote.
-
-Alt codes only exist on the Linux console and on Windows:
-
-- BIOS/UEFI setup, boot loaders and Linux desktops (X11, Wayland) don't know them: safe paste types nothing there, and a normal paste leaves out the characters that aren't on the keyboard. A BIOS uses a US layout, so a normal paste there swaps y/z and garbles symbols: type such things by hand.
-- Windows only reads them with NumLock on (on the remote): with NumLock off, the numpad digits arrive as arrow keys, Home, End etc.
-
-
-## How it works
-
-What each part does, how and why (including what was tried and dropped): [DOCUMENTATION.md](DOCUMENTATION.md).
 
 
 ## Licenses
