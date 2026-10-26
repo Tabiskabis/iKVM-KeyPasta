@@ -236,7 +236,9 @@ if [ "$MODE" = jnlp ]; then
     # container's output when it ends)
     VERBOSE=""
     [ "${KEYPASTA_DEBUG:-false}" = true ] && VERBOSE=-verbose
-    KEYPASTA_VIEWER_TAB=1 javaws $VERBOSE -nosecurity -Xnofork /tmp/launch.jnlp &
+    # KEYPASTA_VIEWER_OPENED: the agent creates it once the viewer's window shows; the Mac app
+    # removes the .jnlp from where the browser saved it only then
+    KEYPASTA_VIEWER_TAB=1 KEYPASTA_VIEWER_OPENED=/tmp/viewer-opened javaws $VERBOSE -nosecurity -Xnofork /tmp/launch.jnlp &
     log "console up; right-click the desktop for the menu, or Stop from the app."
     # the viewer ends (or its start is cancelled): so does the container (the app shows its output
     # and removes it)

@@ -1,7 +1,8 @@
 #!/usr/bin/python3
 # keypasta-jnlp-jars JNLP DIR OUT: the .jnlp's jars (this Linux's: the main jar, the native
 # library jar) fetched from the BMC into DIR, and a copy of the .jnlp at OUT that IcedTea-Web
-# loads them from (its codebase DIR).
+# loads them from (its codebase DIR). Used by the container and by linux/jnlp-keypasta.sh (with
+# IcedTea-Web).
 # Why: the BMC serves its jars Pack200-compressed only (NAME.jar.pack.gz; NAME.jar: 404).
 # IcedTea-Web here can't unpack those ("Pack200 compression is no longer supported", removed from
 # Java in 14), so it loaded nothing ("Unknown Main-Class"). Java 11's unpack200 still can.
@@ -15,8 +16,9 @@ import urllib.error
 import urllib.request
 import xml.etree.ElementTree as ET
 
-UNPACK200 = os.path.join(os.environ.get("JAVA_HOME", "/usr/lib/jvm/java-11-openjdk-amd64"),
-                         "bin", "unpack200")
+# unpack200: $UNPACK200, else $JAVA_HOME's (Java 13 and older have one)
+UNPACK200 = os.environ.get("UNPACK200") or os.path.join(
+    os.environ.get("JAVA_HOME", "/usr/lib/jvm/java-11-openjdk-amd64"), "bin", "unpack200")
 # the BMC's certificate is its own (self-signed); the .jnlp is the one you downloaded from it
 TLS = ssl._create_unverified_context()
 
@@ -61,6 +63,9 @@ def fetch(base, href, dest):
     except urllib.error.HTTPError as e:
         if e.code != 404:
             raise
+    if not os.access(UNPACK200, os.X_OK):
+        sys.exit("jnlp-jars: %s is Pack200-compressed only, and there's no unpack200 (%s): it needs a "
+                 "Java 13 or older (e.g. Java 11)" % (href, UNPACK200))
     packed = dest + ".pack.gz"
     with open(packed, "wb") as f:
         f.write(get(base + href + ".pack.gz"))
@@ -89,6 +94,8 @@ def main(jnlp, outdir, out):
     text, n = re.subn(r'(<jnlp\b[^>]*?\bcodebase=)"[^"]*"', r'\1"%s"' % local_base, text, count=1)
     if n != 1:
         sys.exit("jnlp-jars: codebase not rewritable in " + jnlp)
+    # no href: IcedTea-Web would fetch the .jnlp again from there (the local codebase: none there)
+    text = re.sub(r'(<jnlp\b[^>]*?)\s+href="[^"]*"', r'\1', text, count=1)
     # the jars are plain now: no asking for .pack.gz ones
     text = re.sub(r'(name="jnlp\.packEnabled"\s*value=)"true"', r'\1"false"', text)
     with open(out, "w", encoding="utf-8") as f:

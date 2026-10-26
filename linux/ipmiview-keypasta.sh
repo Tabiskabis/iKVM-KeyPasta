@@ -97,6 +97,12 @@ for f in IPMIView.properties account.properties email.properties language.proper
     cp -p "$IPMIVIEW/$f" "$SETTINGS/$f"
 done
 export KEYPASTA_IPMIVIEW_SETTINGS="$SETTINGS/"
+# IPMIView's tunnel for encrypted consoles (BMCSecurity/linux/stunnel64, also the one the .jnlp
+# viewer brings) needs libnsl.so.1, an old glibc library (Fedora and others: a package of its own).
+# Without it the console says "connect failed sd:N". Said here; IPMIView starts anyway.
+if ! { ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null; } | grep -q 'libnsl\.so\.1 .*x86-64'; then
+    echo "libnsl.so.1 is missing: encrypted KVM consoles won't connect (Fedora: sudo dnf install libnsl)." >&2
+fi
 cd "$IPMIVIEW" || exit 1
 if [ -z "$LOG" ]; then
     exec ./IPMIView20 - "$SETTINGS/"

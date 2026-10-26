@@ -12,11 +12,15 @@
 ::     Java programs (which none of them survives if the jar goes missing).
 ::   - Java 8 for it (JAVAVERSION): the viewer's .jnlp asks for options Java 17 and newer refuse.
 ::     Set in the copy below, so no OpenWebStart setting forces it on other programs.
-::   - The .jnlp is moved to the user's %TEMP%\iKVM-KeyPasta\ (also when the UAC prompt is
+::   - The .jnlp is copied to the user's %TEMP%\iKVM-KeyPasta\ (also when the UAC prompt is
 ::     answered with another admin account), named launch-<date>-<time>-<BMC>-<random>.jnlp, and
 ::     kept there for a week after it was last opened (older ones are deleted at each start).
-::     Out of Downloads, the browser saves the next one under the same name. Opened again, it
-::     works only as long as the BMC accepts the console session's login data in it.
+::     Opened again, it works only as long as the BMC accepts the console session's login data
+::     in it. The original is deleted only once a viewer window has opened from it (the agent
+::     creates the file KEYPASTA_VIEWER_OPENED names when the viewer's window shows, which it
+::     builds after connecting and logging in) within VIEWERWAIT seconds, and only if it's
+::     unchanged: out of Downloads, the browser saves the next one under the same name. Any other
+::     outcome (no window, no agent) leaves it there for another try.
 ::
 ::   iKVM-jnlp-launcher.cmd /register     offer it for .jnlp files (as yourself, not as admin;
 ::                                         /register /quiet: without messages, for install.cmd),
@@ -36,6 +40,9 @@ set "JNLP=%USERPROFILE%\Downloads\launch.jnlp"
 set "OWS=%ProgramFiles%\OpenWebStart"
 :: Java version for the iKVM viewer (OpenWebStart's syntax: 1.8* = any 1.8). Empty: as the .jnlp says
 set "JAVAVERSION=1.8*"
+:: Seconds to wait for a viewer window to open from the .jnlp before leaving it where it is
+:: (includes answering OpenWebStart's questions and it downloading a Java)
+set "VIEWERWAIT=300"
 set "AGENT=%~dp0iKVM-KeyPasta-agent.jar"
 if not exist "%AGENT%" if exist "%~dp0..\iKVM-KeyPasta-agent.jar" for %%F in ("%~dp0..\iKVM-KeyPasta-agent.jar") do set "AGENT=%%~fF"
 set "USERTEMP=%TEMP%"
@@ -124,9 +131,9 @@ set "NAME="
 for /f "usebackq delims=" %%N in (`powershell -NoProfile -Command "$h = 'unknown'; if ((Get-Content -LiteralPath $env:JNLP -Raw) -match 'codebase=.[a-z]+://([^/''\x22]+)') { $h = $Matches[1] -replace ':\d+$', '' -replace '[^A-Za-z0-9.-]', '_' }; 'launch-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $h + '-' + ('{0:D6}' -f (Get-Random -Maximum 1000000))"`) do set "NAME=%%N"
 if not defined NAME set "NAME=launch-%RANDOM%%RANDOM%"
 set "COPY=%COPYDIR%\%NAME%.jnlp"
-move /y "%JNLP%" "%COPY%" >nul
+copy /y "%JNLP%" "%COPY%" >nul
 if not exist "%COPY%" (
-    >&2 echo Couldn't move "%JNLP%".
+    >&2 echo Couldn't copy "%JNLP%".
     pause
     exit /b 1
 )
@@ -134,7 +141,13 @@ rem Copies not opened for a week: deleted. This one counts as opened now (its da
 powershell -NoProfile -Command "$old = (Get-Date).AddDays(-7); Get-ChildItem -LiteralPath $env:COPYDIR -Filter 'launch-*.jnlp' | Where-Object { $_.LastWriteTime -lt $old } | Remove-Item -Force -ErrorAction SilentlyContinue; (Get-Item -LiteralPath $env:COPY).LastWriteTime = Get-Date" >nul 2>&1
 rem the Java version the .jnlp asks for (<j2se version="..."> or <java version="...">)
 if defined JAVAVERSION powershell -NoProfile -Command "$f = $env:COPY; $t = [IO.File]::ReadAllText($f); [IO.File]::WriteAllText($f, ($t -replace '(<(?:j2se|java)\b[^>]*?\bversion\s*=\s*)([\x22''])[^\x22'']*\2', ('${1}${2}' + $env:JAVAVERSION + '${2}')))" >nul 2>&1
-start "" "%OWS%\javaws.exe" "%COPY%"
+rem The agent creates KEYPASTA_VIEWER_OPENED's file once the viewer's window shows (the viewer
+rem inherits this environment through OpenWebStart).
+set "KEYPASTA_VIEWER_OPENED=%COPYDIR%\%NAME%.opened"
+rem OpenWebStart started by a hidden PowerShell, which then waits for that file and deletes the
+rem original .jnlp, if it's still the one copied (its hash taken before, as the copy was changed
+rem above). This window closes meanwhile.
+start "" powershell -NoProfile -WindowStyle Hidden -Command "$o = $env:KEYPASTA_VIEWER_OPENED; Remove-Item -LiteralPath $o -Force -ErrorAction SilentlyContinue; $h = (Get-FileHash -LiteralPath $env:JNLP).Hash; Start-Process -FilePath ($env:OWS + '\javaws.exe') -ArgumentList ([char]34 + $env:COPY + [char]34); $end = (Get-Date).AddSeconds([int]$env:VIEWERWAIT); while ((Get-Date) -lt $end) { if (Test-Path -LiteralPath $o) { Remove-Item -LiteralPath $o -Force -ErrorAction SilentlyContinue; if ((Get-FileHash -LiteralPath $env:JNLP -ErrorAction SilentlyContinue).Hash -eq $h) { Remove-Item -LiteralPath $env:JNLP -Force }; break }; Start-Sleep -Milliseconds 500 }"
 exit /b
 
 rem Offered for .jnlp files of this user: a ProgID with this script as open command, listed in

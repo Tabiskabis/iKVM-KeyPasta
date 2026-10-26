@@ -364,6 +364,7 @@ final class ViewerWatch {
         if (!shownLogged) {
             shownLogged = true;
             Log.d("viewer: window shown");
+            ViewerStart.opened();
         }
         if (!videoLogged && w instanceof java.awt.Frame && String.valueOf(((java.awt.Frame) w).getTitle()).contains("Resolution")) {
             videoLogged = true;

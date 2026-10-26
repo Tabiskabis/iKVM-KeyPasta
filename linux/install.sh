@@ -24,7 +24,7 @@
 #     and ~/Downloads. Unpacked or copied into /opt (other users can't read your home folder).
 # Installing one kind removes the other (an update of a --system install needs --system again).
 # Making iKVM Viewer your program for .jnlp files (other .jnlp files still go to
-# OpenWebStart unchanged) is asked first; --jnlp does it without asking, --no-jnlp leaves it as it
+# javaws, OpenWebStart's or IcedTea-Web's, unchanged) is asked first; --jnlp does it without asking, --no-jnlp leaves it as it
 # is (as does a run without a terminal to ask in). An ipmiview command that isn't this one is left
 # alone.
 
@@ -82,7 +82,7 @@ remove() {
     $AS rm -f "$ICONS/32x32/apps/ipmiview-keypasta.png"
     if [ -d "$DEST" ]; then
         # ipmiview-folder: written by earlier versions
-        $AS rm -f "$DEST/ipmiview-keypasta.sh" "$DEST/jnlp-keypasta.sh" "$DEST/iKVM-KeyPasta-agent.jar" "$DEST/ipmiview-folder"
+        $AS rm -f "$DEST/ipmiview-keypasta.sh" "$DEST/jnlp-keypasta.sh" "$DEST/keypasta-jnlp-jars" "$DEST/iKVM-KeyPasta-agent.jar" "$DEST/ipmiview-folder"
         $AS rmdir "$DEST" 2>/dev/null || echo "$DEST kept: other files in it."
     fi
     refresh
@@ -248,6 +248,8 @@ $AS install -d -m 755 "$DEST"
 $AS install -m 644 "$ROOT/iKVM-KeyPasta-agent.jar" "$DEST/iKVM-KeyPasta-agent.jar"
 $AS install -m 755 "$HERE/ipmiview-keypasta.sh" "$DEST/ipmiview-keypasta.sh"
 $AS install -m 755 "$HERE/jnlp-keypasta.sh" "$DEST/jnlp-keypasta.sh"
+# the .jnlp's jars for IcedTea-Web (shared with the Mac app's container)
+$AS install -m 755 "$ROOT/mac/container/keypasta-jnlp-jars" "$DEST/keypasta-jnlp-jars"
 $AS rm -f "$DEST/ipmiview-folder"                   # written by earlier versions
 
 # The icons, then the menu entries with this install's paths. The entries name their icon by its
@@ -296,7 +298,7 @@ else
     if [ "$JNLPDEFAULT" = ask ]; then
         if [ -t 0 ]; then
             if [ "$SUGGEST" = y ]; then PROMPT="[Y/n]"; else PROMPT="[y/N]"; fi
-            echo ".jnlp files open with ${CURRENT:-no program set}. iKVM Viewer only takes iKVM's, and passes other .jnlp files to OpenWebStart."
+            echo ".jnlp files open with ${CURRENT:-no program set}. iKVM Viewer only takes iKVM's, and passes other .jnlp files to javaws (OpenWebStart or IcedTea-Web)."
             read -r -p "Open .jnlp files with iKVM Viewer? $PROMPT " answer || answer=""
             case "${answer:-$SUGGEST}" in [Yy]*) JNLPDEFAULT=yes ;; *) JNLPDEFAULT=no ;; esac
         else
@@ -304,7 +306,7 @@ else
         fi
     fi
     if [ "$JNLPDEFAULT" = yes ] && xdg-mime default iKVM-Viewer.desktop "$JNLPTYPE" 2>/dev/null; then
-        echo ".jnlp files now open with iKVM Viewer (other .jnlp files still go to OpenWebStart)."
+        echo ".jnlp files now open with iKVM Viewer (other .jnlp files still go to javaws)."
     else
         [ "$JNLPDEFAULT" = yes ] && echo "Couldn't set the program for .jnlp files (xdg-mime)."
         echo ".jnlp files open with ${CURRENT:-no program set}. $HOWTO"

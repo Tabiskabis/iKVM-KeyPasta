@@ -28,7 +28,7 @@ Move `IPMIView KeyPasta.app` to Applications and open it (right-click › Open t
 ## Use
 
 - **Launch IPMIView**, then open a BMC's console from it as usual. With IPMIView's container running, the same button opens its console in the browser.
-- **`.jnlp` files**: drop one on the app's window, click the drop area to choose one, or open the newest `launch.jnlp` in Downloads (also `launch (1).jnlp` and so on; the button shows which). An iKVM `.jnlp` is moved to `~/Library/Caches/iKVM-KeyPasta/` when opened, so the next download gets the same name again.
+- **`.jnlp` files**: drop one on the app's window, click the drop area to choose one, or open the newest `launch.jnlp` in Downloads (also `launch (1).jnlp` and so on; the button shows which). An iKVM `.jnlp` is moved to `~/Library/Caches/iKVM-KeyPasta/` when it's successfully opened, so the next download gets the same name again.
 - **Paste:** `Option+Shift+V` or `Cmd+Shift+V` in the viewer, or your own hotkey (in the viewer: Options › KeyPasta Preferences, for all BMCs or one). In the container's browser view it pastes your Mac's clipboard; Chrome and Edge ask once whether they may read it. After that the clipboard is shared both ways there: copy in the container, paste on the Mac, and the other way round.
 - **Keyboard layout in the container** (for IPMIView's own fields): the Mac's, when a container starts; a layout of your own isn't recognized: choose it in Preferences › Container.
 - **Alt next to the space bar:** in the viewer, Options › KeyPasta Preferences swaps Option and Command (for all BMCs or one). These settings are the same natively and in the container, in `~/Library/Application Support/iKVM-KeyPasta/agent.properties` (one file for Mac, Windows and Linux: copy or sync it).

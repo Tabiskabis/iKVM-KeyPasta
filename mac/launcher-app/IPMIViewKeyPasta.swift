@@ -284,12 +284,13 @@ final class Model: ObservableObject {
 
     func launchJnlp(_ path: String, alternate: Bool = false) {
         guard FileManager.default.fileExists(atPath: path) else { log = "JNLP not found: \(path)\n"; return }
-        let path = Model.takeJnlp(path)
-        if useContainer { runContainer(jnlp: path, alternate: alternate); return }
+        let taken = Model.takeJnlp(path)
+        let path = taken.path
+        if useContainer { runContainer(jnlp: path, original: taken.original, alternate: alternate); return }
         guard let ws = resolvedJavaws else {
             if Model.dockerAvailable() {
                 log = "OpenWebStart not found — opening the JNLP in the container instead.\n"
-                runContainer(jnlp: path, alternate: alternate)
+                runContainer(jnlp: path, original: taken.original, alternate: alternate)
             } else {
                 log = "To open a JNLP natively, install OpenWebStart, or turn on \"Run in a container\" (needs Docker).\n"
             }
@@ -311,6 +312,10 @@ final class Model: ObservableObject {
         env["XDG_CONFIG_HOME"] = Model.owsProfileConfig
         env["XDG_CACHE_HOME"]  = Model.owsProfileCache
         if !effectiveAgent.isEmpty { env["JAVA_TOOL_OPTIONS"] = "-javaagent:\(effectiveAgent)" + (agentArgs.isEmpty ? "" : "=" + agentArgs) }
+        // the agent creates this file once the viewer's window shows (see watchViewerStart)
+        let opened = (path as NSString).deletingPathExtension + ".opened"
+        try? fm.removeItem(atPath: opened)
+        env["KEYPASTA_VIEWER_OPENED"] = opened
 
         var launched = false
         if let r = ws.range(of: ".app/Contents/") {
@@ -345,6 +350,64 @@ final class Model: ObservableObject {
         run(p, exitLabel: "JNLP " + (path as NSString).lastPathComponent, kind: .jnlp, onExit: { _ in
             if !ended { ended = true; if self.launchingJnlp > 0 { self.launched(ipmiview: false) } }
         })
+        // the viewer's window opened: the agent's file. Run by Boot -Xnofork, the viewer is this
+        // process (java-name.sh execs): its end without the file is the end of the wait. A plain
+        // javaws (launched false) may hand the viewer on and end: only the time counts then.
+        let viaBoot = launched
+        watchViewerStart(taken.original) {
+            if fm.fileExists(atPath: opened) { try? fm.removeItem(atPath: opened); return .started }
+            return viaBoot && !p.isRunning ? .gone : .notYet
+        }
+    }
+
+    // The .jnlp where the browser saved it (takeJnlp) is deleted only once a viewer window has
+    // opened from its copy (state: the agent created the file KEYPASTA_VIEWER_OPENED names when the
+    // viewer's window showed, which it builds after connecting and logging in), if it's still the
+    // same file (the browser then saves the next one under the same name). Any other outcome (no
+    // window within viewerWait seconds, no agent) leaves it there for another try.
+    enum ViewerState { case notYet, started, gone }
+    static let viewerWait = 300.0
+    func watchViewerStart(_ original: (path: String, data: Data)?, state: @escaping () -> ViewerState) {
+        guard let original else { return }
+        let name = (original.path as NSString).lastPathComponent
+        DispatchQueue.global(qos: .utility).async {
+            let end = Date().addingTimeInterval(Model.viewerWait)
+            var s = ViewerState.notYet
+            while Date() < end {
+                s = state()
+                if s != .notYet { break }
+                Thread.sleep(forTimeInterval: 1)
+            }
+            let result = s
+            DispatchQueue.main.async {
+                let fm = FileManager.default
+                if result == .started {
+                    if fm.contents(atPath: original.path) == original.data, (try? fm.removeItem(atPath: original.path)) != nil {
+                        self.log += "Viewer window opened: \(name) removed from where it was saved.\n"
+                    }
+                } else if fm.fileExists(atPath: original.path) {
+                    self.log += "No viewer window opened from \(name): kept where it was saved, for another try.\n"
+                }
+            }
+        }
+    }
+
+    // A program's exit status and output (stdout and stderr), waited for
+    static func output(_ path: String, _ args: [String]) -> (Int32, String) {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: path)
+        p.arguments = args
+        return output(p)
+    }
+
+    static func output(_ p: Process) -> (Int32, String) {
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = pipe
+        do { try p.run() } catch { return (-1, "") }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return (p.terminationStatus, String(decoding: data, as: UTF8.self))
     }
 
     // Directory to point OWS at for finding local JVMs (the folder holding the viewer Java), or the
@@ -373,7 +436,7 @@ final class Model: ObservableObject {
 
     // Build (first run) and start the container in the background, streaming output into the log.
     // No Terminal: the app runs it and opens the console (openConsole) once it is up.
-    func runContainer(jnlp: String?, alternate: Bool = false) {
+    func runContainer(jnlp: String?, original: (path: String, data: Data)? = nil, alternate: Bool = false) {
         guard !containerBusy else { return }
         if passwordNeeded && vncPassword.isEmpty {
             log = "The consoles need a password (Preferences › Container › Security): not started.\n"
@@ -423,6 +486,14 @@ final class Model: ObservableObject {
                 if !self.jnlpConsoles.contains(port) { self.jnlpConsoles.append(port) }
                 self.waitThenOpenConsole(port, alternate: alternate) { self.launched(ipmiview: false) }
                 self.watchContainers()
+                // the viewer's window opened in its container (ikvm-jnlp-PORT, gone with the
+                // viewer): the agent's file there (entrypoint.sh sets KEYPASTA_VIEWER_OPENED)
+                self.watchViewerStart(original) {
+                    let (_, out) = Model.output(Model.docker("exec ikvm-jnlp-\(port) sh -c "
+                        + Model.shq("test -e /tmp/viewer-opened && echo opened || echo waiting")))
+                    if out.contains("opened") { return .started }
+                    return out.contains("waiting") ? .notYet : .gone
+                }
             } else {
                 self.launched(ipmiview: false)
             }
@@ -467,17 +538,19 @@ final class Model: ObservableObject {
         return "us"
     }
 
-    // An iKVM .jnlp (tw.com.aten.ikvm) is moved out of where the browser saved it (the next one
-    // then gets the same name) to ~/Library/Caches/iKVM-KeyPasta/launch-<date>-<time>-<BMC>-
-    // <random>.jnlp, readable by you only (it holds the console session's login data), and kept
-    // there for a week after it was last opened (older ones are deleted here), as on Windows. Other
-    // .jnlp files, one already there, or a failed move: used where they are.
-    static func takeJnlp(_ path: String) -> String {
+    // An iKVM .jnlp (tw.com.aten.ikvm) is copied from where the browser saved it to
+    // ~/Library/Caches/iKVM-KeyPasta/launch-<date>-<time>-<BMC>-<random>.jnlp, readable by you only
+    // (it holds the console session's login data), and kept there for a week after it was last
+    // opened (older ones are deleted here), as on Windows and Linux. The original (with its content)
+    // is returned too: deleted once a viewer has started from the copy (watchViewerStart), so the
+    // browser gives the next one the same name. Other .jnlp files, one already there, or a failed
+    // copy: used where they are (no original).
+    static func takeJnlp(_ path: String) -> (path: String, original: (path: String, data: Data)?) {
         let fm = FileManager.default
         let dir = NSHomeDirectory() + "/Library/Caches/iKVM-KeyPasta"
-        guard let data = fm.contents(atPath: path) else { return path }
+        guard let data = fm.contents(atPath: path) else { return (path, nil) }
         let text = String(decoding: data, as: UTF8.self)
-        guard text.range(of: "tw.com.aten.ikvm", options: .caseInsensitive) != nil else { return path }
+        guard text.range(of: "tw.com.aten.ikvm", options: .caseInsensitive) != nil else { return (path, nil) }
         // copies not opened for a week: deleted; this one counts as opened now
         let weekAgo = Date().addingTimeInterval(-7 * 24 * 3600)
         for name in (try? fm.contentsOfDirectory(atPath: dir)) ?? []
@@ -489,12 +562,12 @@ final class Model: ObservableObject {
         }
         if (path as NSString).deletingLastPathComponent == dir {
             try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: path)
-            return path
+            return (path, nil)
         }
         do {
             try fm.createDirectory(atPath: dir, withIntermediateDirectories: true,
                                    attributes: [.posixPermissions: 0o700])
-        } catch { return path }
+        } catch { return (path, nil) }
         // the BMC: the address the browser used, from the codebase; port off, others as _
         var bmc = "unknown"
         if let re = try? NSRegularExpression(pattern: #"codebase\s*=\s*["'][a-z]+://([^/"']+)"#,
@@ -511,9 +584,8 @@ final class Model: ObservableObject {
         f.dateFormat = "yyyyMMdd-HHmmss"
         let dst = dir + "/launch-" + f.string(from: Date()) + "-" + bmc + "-"
             + String(format: "%06ld", Int.random(in: 0..<1_000_000)) + ".jnlp"
-        do { try fm.moveItem(atPath: path, toPath: dst) } catch { return path }
-        try? fm.setAttributes([.posixPermissions: 0o600, .modificationDate: Date()], ofItemAtPath: dst)
-        return dst
+        guard fm.createFile(atPath: dst, contents: data, attributes: [.posixPermissions: 0o600]) else { return (path, nil) }
+        return (dst, (path, data))
     }
 
     // run.sh's "console-port: N"

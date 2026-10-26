@@ -13,6 +13,10 @@ package keypasta;
  * arguments: no file, no pause.
  * Milestones (Agent, by class loading): KVMMain (started), RMConnection (connecting), Viewer
  * (connected and logged in, building the window); then ViewerWatch: window shown, video started.
+ *
+ * Window shown: the file KEYPASTA_VIEWER_OPENED names is created (opened). The .jnlp launchers
+ * set it for their start, and remove the .jnlp from where the browser saved it only once it's
+ * there: a viewer window has opened, so the console works.
  */
 public final class ViewerStart {
     private ViewerStart() {
@@ -24,6 +28,26 @@ public final class ViewerStart {
             return;
         }
         Thread.sleep(ms);
+    }
+
+    /** The viewer's window is showing: KEYPASTA_VIEWER_OPENED's file created, if set. */
+    static void opened() {
+        Privileged.run(new Runnable() {
+            @Override
+            public void run() {
+                String f = null;
+                try {
+                    f = System.getenv("KEYPASTA_VIEWER_OPENED");
+                    if (f == null || f.isEmpty())
+                        return;
+                    java.io.File file = new java.io.File(f);
+                    if (file.createNewFile() || file.isFile())
+                        Log.d("viewer: window shown, " + f + " created");
+                } catch (Exception e) {
+                    Log.d("viewer: window shown, " + f + " not created: " + e);
+                }
+            }
+        });
     }
 
     /** Agent: a class of the viewer is being loaded; the milestones are logged. */

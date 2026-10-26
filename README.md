@@ -33,7 +33,6 @@ Alternatively, the launcher builds virtualized x86-64 containers to run the Java
 ### Linux
 
 **Launchers** (CLI and Desktop) for IPMIView and .jnlp files. Load the Java agent in the applications and use standard path for IPMIView settings (usually ~/.config/ipmiview).  
-The jnlp launcher still requires OpenWebStart. IcedTea-Web support will follow.
 
 
 ## Scope
@@ -194,7 +193,7 @@ Linux: `linux/install.sh` does it (see Quick install). Windows:
 
 Run `iKVM-jnlp-launcher.cmd /register` (not as admin) where it's installed: `windows\install.cmd` puts it in `%ProgramFiles%\iKVM-KeyPasta\` next to the jar (by hand: copy it there from the `windows` folder together with `iKVM-KeyPasta-agent.jar` and `PPCH_outlined_dark.ico`). Then in the right-click › "Open with" dialog, make it the default for all .jnlp files.
 
-It takes care of elevation and setting the environment, and keeps your Downloads folder clean of iKVM's launch.jnlp files by moving them to `%TEMP%\iKVM-KeyPasta`. Other .jnlp files go to OpenWebStart unchanged.
+It takes care of elevation and setting the environment, and keeps your Downloads folder clean of iKVM's launch.jnlp files by moving them to `%TEMP%\iKVM-KeyPasta` once they were successfully started. Other .jnlp files go to OpenWebStart unchanged.
 
 `/unregister` removes it again. Started without arguments, it opens the launch.jnlp in your Downloads folder.
 
