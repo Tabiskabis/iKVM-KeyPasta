@@ -38,6 +38,16 @@ import javax.swing.JToggleButton;
  *   DeviceFile.deleteDevice, Patch.redirectIPMIViewMain) also loses its saved ID and password in
  *   account.properties (DeviceNameAccount.remove: by its name, and by its IP if no other device in
  *   the list has that IP).
+ * - A device renamed in IPMIView's list (the device editor's OK, IPMIView20$NN.actionPerformed:
+ *   DeviceFile.modifyDevice, Patch.redirectDeviceModify) takes its saved ID and password along:
+ *   IPMIView keeps them under the old name (and the IP), so the login view, which looks them up
+ *   by name only, came up empty while the firmware update popup (name, then IP) still found them.
+ *   Saved under the new name (DeviceNameAccount.save, which encrypts with the new name), removed
+ *   under the old one; a changed IP likewise, unless another device still has the old IP.
+ * - A login view whose device name has no saved account but whose IP has one (devices renamed
+ *   before the above, or saved by IPMIView under the IP only) gets it copied to the name when it
+ *   opens, before IPMIView looks it up, so IPMIView fills the view itself; if IPMIView looked
+ *   first, the fields are filled afterwards (only if empty), "save ID and Password" ticked.
  * - The Sensors tab of a BMC opens in its text view (IPMISession: ComboTab.resetDefaultTab of the
  *   tab holding SensorsReadingView, Patch.redirectSensorsTab), switched to quietly: nothing is read
  *   before the tab is opened (the viewer's switch would read the sensors right at login), and the
@@ -89,10 +99,67 @@ public final class IPMIViewLogin {
         }, AWTEvent.HIERARCHY_EVENT_MASK | AWTEvent.WINDOW_EVENT_MASK | AWTEvent.MOUSE_EVENT_MASK);
     }
 
-    private static void loginView(Component session) throws Exception {
+    private static void loginView(final Component session) throws Exception {
         Object field = session.getClass().getField("Password").get(session);
         if (field instanceof JPasswordField)
             reveal((JPasswordField) field);
+        try {
+            if (!adoptIPAccount(session))
+                return;
+        } catch (Exception e) {
+            Log.d("login view: saved account by IP not used: " + e);
+            return;
+        }
+        javax.swing.SwingUtilities.invokeLater(new Runnable() {     // IPMIView may have looked already
+            @Override
+            public void run() {
+                try {
+                    fillLoginView(session);
+                } catch (Exception e) {
+                    Log.d("login view not filled: " + e);
+                }
+            }
+        });
+    }
+
+    /** No account saved under the session's device name, one under its IP: copied to the name (true). */
+    private static boolean adoptIPAccount(Component session) throws Exception {
+        String name = sessionName(session), ip = (String) field(session, "SIP");
+        if (name == null || name.isEmpty() || ip == null || ip.isEmpty() || name.equals(ip))
+            return false;
+        Class<?> account = Class.forName("IPMIView20.DeviceNameAccount", true, session.getClass().getClassLoader());
+        Method getID = account.getMethod("getID", String.class);
+        if (getID.invoke(null, name) != null || getID.invoke(null, ip) == null)
+            return false;
+        String id = (String) getID.invoke(null, ip);
+        String password = (String) account.getMethod("getDecryptedPassword", String.class).invoke(null, ip);
+        if (password == null)
+            return false;
+        account.getMethod("save", String.class, String.class, String.class).invoke(null, name, id, password);
+        Log.d("login view: the ID and password saved for its IP now saved for its device name too");
+        return true;
+    }
+
+    /** The session's device name (its CSession's hostName). */
+    private static String sessionName(Component session) throws Exception {
+        return (String) field(field(session, "Session"), "hostName");
+    }
+
+    /** The login view filled with the account saved for its name, as IPMIView does, if still empty. */
+    private static void fillLoginView(Component session) throws Exception {
+        JTextField id = (JTextField) session.getClass().getField("UserID").get(session);
+        JPasswordField password = (JPasswordField) session.getClass().getField("Password").get(session);
+        if (!id.getText().isEmpty() || password.getPassword().length > 0)
+            return;
+        String name = sessionName(session);
+        Class<?> account = Class.forName("IPMIView20.DeviceNameAccount", true, session.getClass().getClassLoader());
+        String saved = (String) account.getMethod("getID", String.class).invoke(null, name);
+        if (saved == null)
+            return;
+        id.setText(saved);
+        password.setText((String) account.getMethod("getDecryptedPassword", String.class).invoke(null, name));
+        ((javax.swing.JCheckBox) session.getClass().getField("jSaveAccount").get(session)).setSelected(true);
+        Log.d("login view filled with the saved ID and password");
     }
 
     private static volatile long sampling;
@@ -302,6 +369,49 @@ public final class IPMIViewLogin {
         } catch (Exception e) {
             Log.d("removed device: account not removed: " + e);
         }
+    }
+
+    /**
+     * IPMIView20's DeviceFile.modifyDevice (new name, IP, description, then the old ones): the
+     * device changed, then its saved account moved to the new name (and IP).
+     */
+    public static void modifyDevice(Object deviceFile, String name, String ip, String description,
+                                    String oldName, String oldIP, String oldDescription) throws Exception {
+        Method modify = deviceFile.getClass().getMethod("modifyDevice", String.class, String.class, String.class,
+            String.class, String.class, String.class);
+        try {
+            modify.invoke(deviceFile, name, ip, description, oldName, oldIP, oldDescription);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw e.getCause() instanceof Exception ? (Exception) e.getCause() : e;
+        }
+        try {
+            Class<?> account = Class.forName("IPMIView20.DeviceNameAccount", true, deviceFile.getClass().getClassLoader());
+            boolean moved = moveAccount(account, oldName, name, true);
+            moved |= moveAccount(account, oldIP, ip, oldIP != null && !ipInList(deviceFile, oldIP));
+            if (moved)
+                Log.d("changed device: its saved ID and password moved to its new name/IP in account.properties");
+        } catch (Exception e) {
+            Log.d("changed device: account not moved: " + e);
+        }
+    }
+
+    /** The account saved under from: saved under to (unless one is there), removed under from if asked. */
+    private static boolean moveAccount(Class<?> account, String from, String to, boolean removeOld) throws Exception {
+        if (from == null || to == null || from.isEmpty() || to.isEmpty() || from.equals(to))
+            return false;
+        Method getID = account.getMethod("getID", String.class);
+        String id = (String) getID.invoke(null, from);
+        if (id == null)
+            return false;
+        if (getID.invoke(null, to) == null) {
+            String password = (String) account.getMethod("getDecryptedPassword", String.class).invoke(null, from);
+            if (password == null)
+                return false;
+            account.getMethod("save", String.class, String.class, String.class).invoke(null, to, id, password);
+        }
+        if (removeOld)
+            account.getMethod("remove", String.class).invoke(null, from);
+        return true;
     }
 
     /** Another device of the (already changed) list has this IP. */

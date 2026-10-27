@@ -128,7 +128,8 @@ final class Widen {
      * IPMIView's main window, once when it opens, within the screen, after IPMIView's own resize
      * right after showing it (main: its packed size + 1 wide, + 30 high). macOS: 1144 pixels wide
      * (IPMIView makes it about 900, for its narrow font; the user doesn't want it resized by the
-     * panels it shows), and its edges (mainEdges). Windows, Linux: 20 pixels wider than IPMIView makes it.
+     * panels it shows), and its edges (mainEdges). Windows: 20 pixels wider than IPMIView makes it; Linux
+     * (its wider font, Fonts): 60.
      */
     private static void mainWider(final java.awt.Window w) {
         if (mainWidened || !Icons.IPMIVIEW_MAIN.replace('/', '.').equals(w.getClass().getName()))
@@ -146,7 +147,7 @@ final class Widen {
                     Log.d("IPMIView window maximised: left as it is");
                     return;
                 }
-                int width = Math.min(Icons.isMac() ? 1144 : w.getPreferredSize().width + 1 + 20, screen.width);
+                int width = Math.min(Icons.isMac() ? 1144 : w.getPreferredSize().width + 1 + (Config.LINUX ? 60 : 20), screen.width);
                 int x = Math.max(screen.x, Math.min(w.getX() - (width - w.getWidth()) / 2, screen.x + screen.width - width));
                 Log.d("IPMIView window " + w.getWidth() + " -> " + width + " wide");
                 w.setBounds(x, w.getY(), width, w.getHeight());

@@ -430,6 +430,18 @@ final class Patch {
         }
     }
 
+    /** The device editor's DeviceFile.modifyDevice call becomes IPMIViewLogin.modifyDevice (its saved account follows a rename). */
+    static byte[] redirectDeviceModify(byte[] cf) {
+        try {
+            return redirect(cf.clone(), new String[][] {{"IPMIView20/DeviceFile", "modifyDevice",
+                "(Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V", "object"}},
+                "keypasta/IPMIViewLogin", "device rename");
+        } catch (Throwable t) {
+            Log.d("device rename redirect skipped: " + t);
+            return null;
+        }
+    }
+
     /** IPMISession's ComboTab.resetDefaultTab calls become IPMIViewLogin.resetDefaultTab (see IPMIViewLogin). */
     static byte[] redirectSensorsTab(byte[] cf) {
         try {

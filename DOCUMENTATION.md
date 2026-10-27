@@ -225,7 +225,7 @@ IPMIView is Supermicro's management program; it lists BMCs, logs in to them and 
 - IPMIView quits without asking "Are you sure to quit?" (other questions, like saving a changed configuration, stay).
 - Closing a BMC's session no longer shows the note about closing its KVM console.
 
-**Main window:** 20 pixels wider on Windows and Linux, 1144 pixels wide on macOS (for the wider Mac font). On macOS also its status line gets some margin (the rounded window corners cut the text).
+**Main window:** 20 pixels wider on Windows, 60 on Linux, 1144 pixels wide on macOS (for the wider Mac font). On macOS also its status line gets some margin (the rounded window corners cut the text).
 
 **Fonts.** IPMIView sets its own font, PMingLiU (a Taiwanese font with thin, hard-to-read Latin letters), on macOS and Linux.
 
@@ -237,6 +237,7 @@ IPMIView is Supermicro's management program; it lists BMCs, logs in to them and 
 **Login.** IPMIView's "Save ID and Password" keeps the password in `account.properties`, obfuscated (AES with the device name as key; IPMIView decrypts it itself to fill the login view).
 
 - The password field of the login view gets an **eye button** that shows the password.
+- **A renamed device keeps its saved login.** IPMIView leaves the saved ID and password under the old name when you rename a device (Edit device), and its login view looks them up by name only, so the login came up empty while the firmware update popup (which also tries the IP) still found them. The agent moves them to the new name (and to a new IP if that changed). A device renamed before this fix gets the login saved for its IP copied to its name when its login view opens.
 - **IPMIView's window without Supermicro's brand** (`Unbrand`): its title without " - Super Micro Computer, Inc." (taken off again if IPMIView sets it again), and without the Supermicro logo at the top left (a link to supermicro.com): its panel is removed, the BMC list moves up (IPMIView's files stay unchanged).
 - The firmware update's login popup ("Please input ID and Password") is **filled with the BMC's saved ID and password** (it asked again although they were saved).
 - **Removing a system** from IPMIView's list also removes its saved ID and password (by name, and by IP address if no other system has it).
