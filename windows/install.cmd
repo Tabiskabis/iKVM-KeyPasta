@@ -13,7 +13,9 @@
 ::      winget (for all users: UI Access works only from %ProgramFiles%).
 ::   3. If OpenWebStart (for .jnlp files) is missing: asks whether to install it with winget.
 :: The Windows files are next to this file, the jar one folder up (the project's top folder) or
-:: next to it too. No environment variables. Run it again to update. uninstall.cmd undoes all of it.
+:: next to it too. With the project's java-agent\build.cmd there (a git clone: built files aren't
+:: in it), the jar is built with it first, every time, as you; that fails: the jar already there,
+:: with a warning. No environment variables. Run it again to update. uninstall.cmd undoes all of it.
 
 setlocal
 
@@ -23,6 +25,11 @@ set "FILES=iKVM-KeyPasta-agent.jar iKVM-jnlp-launcher.cmd iKVM-IPMIView-launcher
 set "SELF=%~f0"
 
 if /i "%~1"=="/elevated" goto :elevated
+
+:: the agent jar built from the project's source first, as you (the project folder stays yours)
+set "JARFAILED="
+if exist "%SRC%..\java-agent\build.cmd" call :buildjar
+if defined JARFAILED goto :nojar
 
 fltmc >nul 2>&1
 if errorlevel 1 goto :elevate
@@ -58,6 +65,25 @@ exit /b 0
 pause
 exit /b 1
 
+:nojar
+>&2 echo Not installed: iKVM-KeyPasta-agent.jar is missing and couldn't be built (see above).
+pause
+exit /b 1
+
+:: ---- as the user: the agent jar from the project's source ----
+:: That fails: the jar already there (one folder up or next to this file), with a warning; none:
+:: JARFAILED.
+:buildjar
+call "%SRC%..\java-agent\build.cmd"
+if not errorlevel 1 exit /b 0
+if exist "%SRC%..\iKVM-KeyPasta-agent.jar" goto :oldjar
+if exist "%SRC%iKVM-KeyPasta-agent.jar" goto :oldjar
+set "JARFAILED=1"
+exit /b 1
+:oldjar
+>&2 echo WARNING: iKVM-KeyPasta-agent.jar not rebuilt (see above): installing the one already there.
+exit /b 0
+
 :: ---- as admin: the files ----
 :copy
 :: the running exe can't be overwritten: a new instance with /exit closes it (see uninstall.cmd)
@@ -66,10 +92,12 @@ echo Installing to "%DEST%":
 if not exist "%DEST%" mkdir "%DEST%"
 set "FAILED="
 for %%F in (%FILES%) do (
-    rem next to this file, else one folder up (the jar)
+    rem next to this file, else one folder up (the jar); with the project's source the jar from
+    rem one folder up first, where build.cmd puts it
     set "FROM="
     if exist "%SRC%..\%%F" set "FROM=%SRC%..\%%F"
     if exist "%SRC%%%F" set "FROM=%SRC%%%F"
+    if /i "%%F"=="iKVM-KeyPasta-agent.jar" if exist "%SRC%..\java-agent\build.cmd" if exist "%SRC%..\%%F" set "FROM=%SRC%..\%%F"
     call :copyone "%%F"
 )
 :: permissions only as inherited from %ProgramFiles% (users read and run, admins write), and no

@@ -26,7 +26,7 @@ import javax.imageio.ImageIO;
  * file changes, checked every 2 s.
  *
  * macOS: IPMIView's menus in the Mac menu bar, missing after IPMIView started (the app menu only):
- * the viewer's remedy, ViewerWatch.installIpmiview.
+ * the viewer's remedies, ViewerWatch.installIpmiview (the menu bar watch, the focus watch).
  */
 final class Icons {
     static final String IPMIVIEW_MAIN = "IPMIView20/IPMIView20";

@@ -15,8 +15,11 @@ import java.util.concurrent.TimeUnit;
  * - current: the one typing now. macOS: the input source's ID (defaults read com.apple.HIToolbox),
  *   as Java's input locale may be a language only, or the system region's country. Elsewhere and
  *   as a fallback: Java's input locale (Windows: the keyboard layout's language and country).
- * - installed: macOS: the enabled input sources; Windows: the input language list
- *   (HKCU\Keyboard Layout\Preload); else the current one.
+ * - installed: macOS: the enabled input sources and the current one; Windows: the keyboard
+ *   layouts of the input language list (HKCU\Keyboard Layout\Preload, through Substitutes);
+ *   Linux: X's layouts (setxkbmap -query, X11 and XWayland). Never Java's input locale: that's
+ *   the input language on Windows and the system locale on Linux, not the keyboard (English
+ *   with a Swiss keyboard is common).
  * Found once, the first time asked; nothing of this is ever written.
  */
 final class LocalLayouts {
@@ -55,10 +58,14 @@ final class LocalLayouts {
         return r[0];
     }
 
-    /** The default for the remote: the first of Layouts.CODES installed here, else Swiss German. */
+    /**
+     * The default for the remote: the first installed here of Swiss German, Swiss French, German
+     * and US, in that order (as the AutoHotkey script; US last, as a Mac has ABC next to its own
+     * layout), else Swiss German.
+     */
     static synchronized String remoteDefault() {
         detect();
-        for (String code : Layouts.CODES)
+        for (String code : new String[] {"de-CH", "fr-CH", "de-DE", "us"})
             if (installed.contains(code))
                 return code;
         return "de-CH";
@@ -74,14 +81,31 @@ final class LocalLayouts {
                 try {
                     if (Config.MAC) {
                         current = macCurrentNow();
+                        add(current);
                         for (String name : layoutNames("AppleEnabledInputSources"))
                             add(macName(name));
                     } else if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows")) {
-                        for (String line : command("reg", "query", "HKCU\\Keyboard Layout\\Preload")) {
-                            String[] parts = line.trim().split("\\s+");
-                            if (parts.length == 3 && parts[1].equals("REG_SZ"))
-                                add(windowsKlid(parts[2]));
+                        // Preload names the input languages; a language with another keyboard
+                        // (English with Swiss German, say) has an ID there that Substitutes maps
+                        // to the keyboard layout's KLID
+                        java.util.Map<String, String> substitutes = new java.util.HashMap<String, String>();
+                        for (String[] value : regValues("HKCU\\Keyboard Layout\\Substitutes"))
+                            substitutes.put(value[0].toLowerCase(Locale.ROOT), value[1]);
+                        for (String[] value : regValues("HKCU\\Keyboard Layout\\Preload")) {
+                            String klid = substitutes.get(value[1].toLowerCase(Locale.ROOT));
+                            add(windowsKlid(klid != null ? klid : value[1]));
                         }
+                    } else if (Config.LINUX) {
+                        // "layout:     ch,us" and "variant:    fr," (one variant per layout)
+                        String[] layouts = {}, variants = {};
+                        for (String line : command("setxkbmap", "-query")) {
+                            if (line.startsWith("layout:"))
+                                layouts = line.substring(7).trim().split(",");
+                            else if (line.startsWith("variant:"))
+                                variants = line.substring(8).trim().split(",", -1);
+                        }
+                        for (int i = 0; i < layouts.length; i++)
+                            add(xkb(layouts[i].trim(), i < variants.length ? variants[i].trim() : ""));
                     }
                 } catch (Exception e) {
                     Log.d("local layouts not readable: " + e);
@@ -90,9 +114,7 @@ final class LocalLayouts {
         });
         if (current == null)
             current = fromLocale(inputLocale());
-        if (current != null)
-            add(current);
-        else if (!installed.isEmpty())
+        if (current == null && !installed.isEmpty())
             current = installed.iterator().next();      // the first installed one of Layouts.CODES
         Log.d("local layout " + current + ", installed " + installed);
     }
@@ -160,13 +182,32 @@ final class LocalLayouts {
         return macId("com.apple.keylayout." + name.replace(".", ""));
     }
 
-    /** KLID like 00000807, or a substitute's d0010807: the layout's low four digits. */
+    /**
+     * A keyboard layout's KLID: Windows' own Swiss German, Swiss French, German, US (as the
+     * AutoHotkey script); anything else null, also custom layouts (a0000409: low digits US's).
+     */
     static String windowsKlid(String klid) {
-        if (klid.length() < 4)
-            return null;
-        String low = klid.substring(klid.length() - 4).toLowerCase(Locale.ROOT);
-        return low.equals("0807") ? "de-CH" : low.equals("100c") ? "fr-CH" : low.equals("0407") ? "de-DE"
-            : low.equals("0409") ? "us" : null;
+        String k = klid.toLowerCase(Locale.ROOT);
+        return k.equals("00000807") ? "de-CH" : k.equals("0000100c") ? "fr-CH" : k.equals("00000407") ? "de-DE"
+            : k.equals("00000409") ? "us" : null;
+    }
+
+    /** A registry key's REG_SZ values as {name, data}; empty if it's missing or unreadable. */
+    private static List<String[]> regValues(String key) throws Exception {
+        List<String[]> values = new ArrayList<String[]>();
+        for (String line : command("reg", "query", key)) {
+            String[] parts = line.trim().split("\\s+");
+            if (parts.length == 3 && parts[1].equals("REG_SZ"))
+                values.add(new String[] {parts[0], parts[2]});
+        }
+        return values;
+    }
+
+    /** An X layout and its variant: ch (fr: Swiss French), de, us; anything else null. */
+    static String xkb(String layout, String variant) {
+        if (layout.equals("ch"))
+            return variant.startsWith("fr") ? "fr-CH" : "de-CH";
+        return layout.equals("de") ? "de-DE" : layout.equals("us") ? "us" : null;
     }
 
     static String fromLocale(Locale locale) {

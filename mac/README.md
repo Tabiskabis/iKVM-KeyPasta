@@ -1,6 +1,6 @@
 # iKVM-KeyPasta on macOS
 
-Supermicro's Java remote console doesn't run on a Mac out of the box: IPMIView refuses it for most BMCs ("The function can't support on mac"), and the `.jnlp` viewer from the BMC's web interface needs an Intel Java and a Java Web Start. **IPMIView KeyPasta**, a small Mac app, runs both, with the iKVM-KeyPasta keyboard fixes and paste.
+Supermicro's Java remote console doesn't run on a Mac out of the box: IPMIView refuses it for most BMCs ("The function can't support on mac"), and the `.jnlp` viewer from the BMC's web interface needs an Intel Java and a Java Web Start. **iKVM-KeyPasta** (`IPMIView+iKVM KeyPasta launcher.app`), a small Mac app, runs both, with the iKVM-KeyPasta keyboard fixes and paste.
 
 Not part of the release, use at your own risk. How it works and why: [DOCUMENTATION.md](../DOCUMENTATION.md#13-macos-the-app-the-scripts-the-container).
 
@@ -8,7 +8,7 @@ Not part of the release, use at your own risk. How it works and why: [DOCUMENTAT
 
 - macOS 13 (Ventura) or newer, on Apple silicon or Intel: the app is built for both. **Only tested on macOS 27:** nothing on the Mac (app, scripts, container) has been tried on earlier versions.
 - IPMIView for Linux (x64) from Supermicro's website, unpacked into `~/.local/share` (or `~/.local/bin`, `~/Applications`, `/opt`, `/Applications`: searched in that order, the newest version in the first place that has one). Anywhere else: choose its folder in Preferences › General.
-- An Intel (x86_64) Java 11 runtime, e.g. Temurin's JRE `.pkg` for macOS x64: the viewer's native libraries are Intel only (on Apple Silicon it runs through Rosetta 2).
+- An Intel (x86_64) Java 8 or 11 runtime, e.g. Temurin's JRE `.pkg` for macOS x64: the viewer's native libraries are Intel only (on Apple Silicon it runs through Rosetta 2).
 - [Homebrew](https://brew.sh)'s stunnel, for BMCs with encrypted KVM: `brew install stunnel`.
 - For `.jnlp` files: [OpenWebStart](https://openwebstart.com/download/).
 - To build the app: the Xcode Command Line Tools (`xcode-select --install`).
@@ -24,11 +24,11 @@ cd mac/launcher-app
 ./build.sh
 ```
 
-Move `IPMIView KeyPasta.app` to Applications and open it (right-click › Open the first time). Or let `./build.sh --install` do that: it puts the new app in `/Applications` (in `~/Applications` if you can't write there, no admin rights needed) and moves the one already there to the Trash. In its Preferences (app menu, `Cmd+,`): General sets the IPMIView folder and whether it runs natively or in a container; the Native tab the Intel Java and OpenWebStart, if not found by themselves; the Container tab where the consoles open.
+Move `IPMIView+iKVM KeyPasta launcher.app` to Applications and open it (right-click › Open the first time). Or let `./build.sh --install` do that: it puts the new app in `/Applications` (in `~/Applications` if you can't write there, no admin rights needed) and moves the one already there to the Trash. In its Preferences (app menu, `Cmd+,`): General sets the IPMIView folder and whether it runs natively or in a container; the Native tab the Intel Java and OpenWebStart, if not found by themselves; the Container tab where the consoles open.
 
 ## Use
 
-- **Launch IPMIView**, then open a BMC's console from it as usual. With IPMIView's container running, the same button opens its console in the browser.
+- **Launch IPMIView**, then open a BMC's console from it as usual. With IPMIView's container running, the same button opens its console, in a VNC app or the browser (Preferences › Container › Consoles; Option-click for the other one).
 - **`.jnlp` files**: drop one on the app's window, click the drop area to choose one, or open the newest `launch.jnlp` in Downloads (also `launch (1).jnlp` and so on; the button shows which). An iKVM `.jnlp` is moved to `~/Library/Caches/iKVM-KeyPasta/` when it's successfully opened, so the next download gets the same name again.
 - **Paste:** `Option+Shift+V` or `Cmd+Shift+V` in the viewer, or your own hotkey (in the viewer: Options › KeyPasta Preferences, for all BMCs or one). In the container's browser view it pastes your Mac's clipboard; Chrome and Edge ask once whether they may read it. After that the clipboard is shared both ways there: copy in the container, paste on the Mac, and the other way round.
 - **Keyboard layout in the container** (for IPMIView's own fields): the Mac's, when a container starts; a layout of your own isn't recognized: choose it in Preferences › Container.
@@ -51,10 +51,10 @@ Move `IPMIView KeyPasta.app` to Applications and open it (right-click › Open t
 
 ## Extras
 
-- **Karabiner-Elements rules** (`karabiner/*.json` files): The `swap-fn-fkeys-*.json` Forces the F-Row keys to act as F-Keys. Use the Fn-key to use them as Media keys. The `swap-alt-cmd-*.json` files were made before the agent got the same function. Might still be useful.  
+- **Karabiner-Elements rules** (`karabiner-elements/*.json` files), each for the Java iKVM Viewer and for TigerVNC: the `swap-fn-fkeys-*.json` rules make the F-row keys act as F-keys; with the Fn key they're the media keys. The `swap-alt-cmd-*.json` rules were made before the agent got the same function. Might still be useful.  
   Install: Karabiner-Elements Settings › Complex Modifications › Add your own rule, paste the file's content, Save.
 - **Without the app:** `bash ipmiview-keypasta.sh [IPMIView folder]` starts IPMIView the same way (settings at the top of the script; without a folder it searches the same places as the app).
 
 ## Known bugs
 
-Sometimes the macOS menu bar does not show items. They appear when hovering the mouse pointer over it or switching windows. This is a known issue in macOS 27. The app tries to mitigate it, but it still happens sometimes.
+CapsLock sometimes toggles twice, natively and in the container. The menu bar items that sometimes didn't show (a macOS 27 issue) appear since agent 3.5.0. All open issues: [Known issues](../DOCUMENTATION.md#16-known-issues) in the documentation.

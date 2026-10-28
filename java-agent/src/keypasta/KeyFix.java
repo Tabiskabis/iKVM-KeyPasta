@@ -32,9 +32,7 @@ import javax.swing.Timer;
  * - iKVM's "stable" keyboard mode drops a held left Ctrl when the next key goes down, but a key
  *   release sends it: left Ctrl is followed by the release of F24 (never pressed; no effect on
  *   Linux and Windows remotes).
- * - Lock keys (CapsLock, ...) go to iKVM unchanged for now: the own Windows tap stopped CapsLock
- *   from arriving in a test, unexplained by iKVM's Java code. Being rechecked against AGENTS.md
- *   ("CapsLock as one quick tap") before this is settled.
+ * - Lock keys (CapsLock, ...) go to iKVM unchanged (see Native for "Simplify Caps Lock").
  * - CapsLock follows the window like on a KVM switch: each viewer window keeps the remote's
  *   state, other programs keep theirs (see windowFocus).
  * - Paste (see Paste).

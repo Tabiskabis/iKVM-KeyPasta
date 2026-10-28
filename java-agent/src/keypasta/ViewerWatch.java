@@ -23,10 +23,10 @@ import java.util.WeakHashMap;
  *   only), Java's modal blocker (Window.modalBlocker), the native peer's (LWWindowPeer.blocker),
  *   the peer's skipNextFocusChange.
  * - macOS: the viewer's app in front but none of its windows focused (after the launch, after
- *   Preferences closed, after Record's dialogs): keys went nowhere and the Mac menu bar showed the
- *   app menu only or was grey, until the mouse moved over the viewer or the app was switched. See
- *   focusWhenNoneIs. (macOS rejects focus requests while the app isn't in front:
- *   CPlatformWindow.rejectFocusRequest.)
+ *   Preferences closed, after Record's dialogs): keys went nowhere and the Mac menu bar was grey,
+ *   until the mouse moved over the viewer or the app was switched. See focusWhenNoneIs. (macOS
+ *   rejects focus requests while the app isn't in front: CPlatformWindow.rejectFocusRequest.)
+ *   Redrawing the Mac menu bar when its menus change is MacMenuBar.watch's, natively.
  */
 final class ViewerWatch {
     /**
@@ -56,8 +56,10 @@ final class ViewerWatch {
     }
 
     static void install(final boolean mac) {
-        if (mac)
+        if (mac) {
             macFields();
+            MacMenuBar.watch();
+        }
         javax.swing.Timer t = new javax.swing.Timer(500, new java.awt.event.ActionListener() {
             @Override
             public void actionPerformed(java.awt.event.ActionEvent e) {
@@ -155,17 +157,15 @@ final class ViewerWatch {
         }
     }
 
-    private static boolean ipmiviewStarted;
-
     /**
      * macOS, IPMIView's own process: its menus were missing from the Mac menu bar after it started
-     * (the app menu only), as the viewer's after its launch. The viewer's remedy for its main
-     * window (a showing frame with a menu bar, not a viewer's): focusWhenNoneIs every 500 ms, and
-     * the first time it has the focus after the start, its menus rebuilt and the menu bar redrawn
-     * (afterFocusBack), also when the focus came by itself. Event dispatch thread.
+     * (the app menu only), as the viewer's after its launch. The menu bar is watched (MacMenuBar),
+     * and its main window (a showing frame with a menu bar, not a viewer's) gets the viewer's
+     * focusWhenNoneIs every 500 ms. Event dispatch thread.
      */
     static void installIpmiview() {
         macFields();
+        MacMenuBar.watch();
         javax.swing.Timer t = new javax.swing.Timer(500, new java.awt.event.ActionListener() {
             @Override
             public void actionPerformed(java.awt.event.ActionEvent e) {
@@ -174,13 +174,7 @@ final class ViewerWatch {
                         if (!w.isShowing() || !(w instanceof java.awt.Frame) || KeyFix.isViewerWindow(w)
                             || ((java.awt.Frame) w).getMenuBar() == null)
                             continue;
-                        if (!ipmiviewStarted && w.isFocused()) {
-                            ipmiviewStarted = true;
-                            Log.d("IPMIView focused after its start: its menus rebuilt");
-                            afterFocusBack(w, "IPMIView");
-                        } else {
-                            focusWhenNoneIs(w, "IPMIView");
-                        }
+                        focusWhenNoneIs(w, "IPMIView");
                     } catch (Throwable ex) {
                         Log.d("IPMIView watch failed: " + ex);
                     }
@@ -207,8 +201,8 @@ final class ViewerWatch {
      * left, until another app was activated and this one again). requestFocus first; if the window
      * still isn't focused a second later and macOS has it as its key window (after Record's
      * dialogs it does), the activation Java dropped is delivered (deliverFocus), and once focused
-     * its menus are rebuilt and the Mac menu bar redrawn (afterFocusBack). Why it holds back or
-     * what it did is logged when that changes.
+     * its menus are rebuilt (afterFocusBack: they were grey). Why it holds back or what it did is
+     * logged when that changes.
      */
     private static void focusWhenNoneIs(Window w, String who) throws Exception {
         if (w.isFocused() || KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusedWindow() != null) {
@@ -244,9 +238,6 @@ final class ViewerWatch {
         if (focusTries == 1) {
             (v != null ? v : w).requestFocus();
             focusNote(who + " focused: its app was in front with no window focused (requestFocus)");
-            // its menus too, once focused: else none showed in the Mac menu bar (the viewer's menus
-            // were just changed: Exit removed, KeyPasta added, Cmd+Q taken off)
-            afterFocusBack(w, who);
         } else if (focusTries == 3) {                                 // after a second
             String key = nativeKey(w);
             if ("true".equals(key) && deliverFocus(w)) {
@@ -285,8 +276,7 @@ final class ViewerWatch {
 
     /**
      * Once the viewer has the focus again (100 ms polls, at most 3 s): its menus rebuilt
-     * (menuBarAgain: they were grey), then the Mac menu bar redrawn (MacMenuBar: macOS 27 doesn't
-     * show changed menus until the pointer goes to the menu bar).
+     * (menuBarAgain: they were grey); MacMenuBar's watch redraws the menu bar for that.
      */
     private static void afterFocusBack(final Window w, final String who) {
         final long since = System.currentTimeMillis();
@@ -300,9 +290,6 @@ final class ViewerWatch {
             if (!w.isFocused())
                 return;
             menuBarAgain(w, who);
-            javax.swing.Timer redraw = new javax.swing.Timer(150, e2 -> MacMenuBar.redraw());
-            redraw.setRepeats(false);
-            redraw.start();
         });
         t.start();
     }
@@ -311,8 +298,8 @@ final class ViewerWatch {
      * The viewer's menus anew in the Mac menu bar. macOS AWT puts a window's menus there when it
      * becomes key (AWTWindow activateWindowMenuBar), greyed if the window is disabled then: after
      * Record's dialogs it still was (grey menus). Taken away and given back (Aqua's ScreenMenuBar,
-     * the frame's AWT MenuBar) its menus are made anew, enabled, for the key window; macOS 27
-     * draws them only once the menu bar is redrawn (MacMenuBar).
+     * the frame's AWT MenuBar) its menus are made anew, enabled, for the key window (macOS 27
+     * draws them once the menu bar is redrawn: MacMenuBar's watch sees the change).
      */
     private static void menuBarAgain(Window w, String who) {
         if (!(w instanceof java.awt.Frame))

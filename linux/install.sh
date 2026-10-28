@@ -137,15 +137,13 @@ done
 DOWNLOAD=https://www.supermicro.com/Bios/sw_download/1176/IPMIView_2.25.0_build.260812_bundleJRE_Linux_x64.tar.gz
 EXAMPLE=IPMIView_2.25.0_build.260812_bundleJRE_Linux_x64.tar.gz
 
-# The agent: built here if it isn't (a git clone has none: *.jar is in .gitignore)
-if [ ! -f "$ROOT/iKVM-KeyPasta-agent.jar" ]; then
-    command -v javac >/dev/null 2>&1 && command -v jar >/dev/null 2>&1 \
-        || fail "iKVM-KeyPasta-agent.jar not found in $ROOT, and no JDK here to build it.
-Install a JDK 9 or newer (e.g. sudo apt install default-jdk-headless) and run this again."
-    echo "Building iKVM-KeyPasta-agent.jar"
-    sh "$ROOT/java-agent/build.sh" || fail "Building iKVM-KeyPasta-agent.jar failed (see above)."
-    [ -f "$ROOT/iKVM-KeyPasta-agent.jar" ] || fail "iKVM-KeyPasta-agent.jar not found in $ROOT after building it."
+# The agent: built from the project's source every time it's here (a git clone has no jar: *.jar
+# is in .gitignore). That fails: the jar already there, with a warning.
+if [ -f "$ROOT/java-agent/build.sh" ] && ! sh "$ROOT/java-agent/build.sh" && [ -f "$ROOT/iKVM-KeyPasta-agent.jar" ]; then
+    echo "WARNING: iKVM-KeyPasta-agent.jar not rebuilt (see above): installing the one already there." >&2
 fi
+[ -f "$ROOT/iKVM-KeyPasta-agent.jar" ] || fail "iKVM-KeyPasta-agent.jar not found in $ROOT and couldn't be built
+(needs a JDK 9 or newer, e.g. sudo apt install default-jdk-headless)."
 
 # Where IPMIView is looked for and where a download or folder goes
 if [ "$KIND" = system ]; then

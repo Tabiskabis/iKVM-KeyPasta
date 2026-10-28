@@ -25,15 +25,15 @@ if not exist "%AGENT%" if exist "%~dp0..\iKVM-KeyPasta-agent.jar" for %%F in ("%
 set "SELF=%~f0"
 
 :: IPMIView's settings (IPMIView.properties: the BMC list; account.properties: the saved logins;
-:: proxy, language) are in %APPDATA%\IPMIView if that folder exists (create it, and move or copy
-:: your settings files there yourself), else in IPMIView's program folder, as without this script.
-:: IPMIView takes a settings folder as its second argument (the first must be none of its flags:
-:: d p s t x i c e q forceUpdate, so "-"). IPMIView20.exe always runs in its own folder
-:: (IPMIView20.lax: lax.user.dir=.), and only admins can write there. Two reads stay in the
-:: program folder: the BMC list's sort order (sort.properties) and the language chosen at the start
-:: (language.properties, read before the argument). Always your %APPDATA%, also when the UAC
-:: prompt asked for another account's password: this script finds it before it asks and hands it
-:: to its elevated self (after /elevated), which an admin may read and write. Not tested yet.
+:: proxy, language, sort order, ...) are in %APPDATA%\IPMIView if that folder exists (create it,
+:: and move or copy your settings files there yourself), else in IPMIView's program folder, as
+:: without this script. IPMIView takes a settings folder as its second argument (the first must be
+:: none of its flags: d p s t x i c e q forceUpdate, so "-"). IPMIView20.exe always runs in its
+:: own folder (IPMIView20.lax: lax.user.dir=.), and only admins can write there. The files IPMIView
+:: itself still opens in its own folder (sort order, language, ...) the agent sends to the settings
+:: folder too, so all of them are there. Always your %APPDATA%, also when the UAC prompt asked for
+:: another account's password: this script finds it before it asks and hands it to its elevated
+:: self (after /elevated), which an admin may read and write.
 set "USERSETTINGS=%APPDATA%\IPMIView"
 if /i "%~1"=="/elevated" if not "%~2"=="" set "USERSETTINGS=%~2"
 

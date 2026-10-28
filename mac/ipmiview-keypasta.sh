@@ -156,5 +156,5 @@ done
 export KEYPASTA_IPMIVIEW_SETTINGS="$DATA/"
 
 # IPMIView20.lax's class path. Its menus in the Mac's menu bar, as Mac apps have
-# them (only IPMIView: the viewers it starts keep theirs in the window)
+# them (the agent does the same for the viewers it starts)
 exec java -Xmx512m -Dapple.laf.useScreenMenuBar=true -cp "$IPMIVIEW/iKVM.jar:$IPMIVIEW/IPMIView20.jar:$IPMIVIEW/TrapView.jar:$IPMIVIEW/JViewerX9.jar:$IPMIVIEW/lax.jar" IPMIView20.IPMIView20 - "$DATA/"

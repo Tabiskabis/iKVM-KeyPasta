@@ -13,8 +13,9 @@ import java.io.File;
  *   pasteNonAscii=ask      characters typed as alt codes: ask, always, never
  *   remoteOs=linux         linux (console) or windows: alt codes of Windows-1252 128-159
  *   remoteLayout=auto      default layout of the remotes for fast paste: us, de-CH, fr-CH, de-DE,
- *                          other (Alt codes), auto (Swiss German); the dialog's default and a
- *                          BMC's own layout win over it
+ *                          other (Alt codes), auto (the first of Swiss German, Swiss French,
+ *                          German, US installed here, else Swiss German); the dialog's default
+ *                          and a BMC's own layout win over it
  *   localLayout=auto       macOS only (Java doesn't pass key positions there): de-CH, fr-CH,
  *                          de-DE, us, auto (the current input source)
  *   keyDelay=2             ms between keys when pasting
@@ -88,7 +89,7 @@ final class Config {
         defaults.put(SIMPLE_CAPS, "false");
         defaults.put(PASTE, "true");
         defaults.put(HOTKEY, DEFAULT_HOTKEY);
-        defaults.put(LAYOUT, "de-CH");
+        defaults.put(LAYOUT, "de-CH");      // until loadPrefs: the local one (not in premain, see there)
         defaults.put(NON_ASCII, "ask");
         defaults.put(REMOTE_WINDOWS, "false");
     }
@@ -396,6 +397,13 @@ final class Config {
                 if (k.equals(SWAP))
                     swapSaid = true;
             }
+        }
+        // The default layout said nowhere (option, file): the first of the four installed here.
+        // Only now, in the viewer: reading the local layouts loads AWT and runs a command, which
+        // premain must not do in every Java program.
+        if (!layoutSaid) {
+            defaults.put(LAYOUT, LocalLayouts.remoteDefault());
+            Log.d("default remote layout " + defaults.get(LAYOUT) + " (from the local layouts)");
         }
         Log.d("settings: " + file());
         applyHost();

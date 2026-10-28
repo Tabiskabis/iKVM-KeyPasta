@@ -1,5 +1,6 @@
 #!/bin/bash
-# Build "IPMIView KeyPasta.app" from IPMIViewKeyPasta.swift.
+# Build "IPMIView+iKVM KeyPasta launcher.app" (named iKVM-KeyPasta in its menus and window) from
+# IPMIViewKeyPasta.swift.
 # Needs the Xcode Command Line Tools (xcode-select --install) — no full Xcode.
 #
 #   ./build.sh             build it here (mac/launcher-app/)
@@ -23,15 +24,15 @@ done
 set -e
 cd "$(dirname "$0")"
 MAC="$(cd .. && pwd)"                 # the mac/ folder
-APP="IPMIView KeyPasta.app"
+APP="IPMIView+iKVM KeyPasta launcher.app"
 EXEC="IPMIViewKeyPasta"
 ID="iKVM-KeyPasta"
-# The agent jar: the project's, at its top folder. Not there: built with java-agent/build.sh
-# (needs a JDK 9 or newer), if the project's java-agent folder is here.
+# The agent jar: the project's, at its top folder, built first every time with java-agent/build.sh
+# (needs a JDK 9 or newer) if the project's java-agent folder is here. That fails: the jar already
+# there, with a warning.
 AGENT_JAR="$MAC/../iKVM-KeyPasta-agent.jar"
-if [ ! -f "$AGENT_JAR" ] && [ -f "$MAC/../java-agent/build.sh" ]; then
-    echo "$AGENT_JAR not found, building it."
-    sh "$MAC/../java-agent/build.sh" || echo "Building the agent jar failed." >&2
+if [ -f "$MAC/../java-agent/build.sh" ] && ! sh "$MAC/../java-agent/build.sh" && [ -f "$AGENT_JAR" ]; then
+    echo "WARNING: the agent jar not rebuilt (see above): bundling the one already there." >&2
 fi
 [ -f "$AGENT_JAR" ] || { echo "ERROR: $AGENT_JAR not found. Build it with java-agent/build.sh, or copy it there." >&2; exit 1; }
 AGENT_VER="$(unzip -p "$AGENT_JAR" META-INF/MANIFEST.MF | sed -n 's/^Implementation-Version:[[:space:]]*//p' | head -1 | tr -d '\r')"
@@ -54,8 +55,8 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleName</key>            <string>IPMIView KeyPasta</string>
-    <key>CFBundleDisplayName</key>     <string>IPMIView KeyPasta</string>
+    <key>CFBundleName</key>            <string>iKVM-KeyPasta</string>
+    <key>CFBundleDisplayName</key>     <string>iKVM-KeyPasta</string>
     <key>CFBundleIdentifier</key>      <string>$ID</string>
     <key>CFBundleExecutable</key>      <string>$EXEC</string>
     <key>CFBundlePackageType</key>     <string>APPL</string>
@@ -133,23 +134,20 @@ OLD="$DEST/$APP"
 [ "$DEST" = "$HOME/Applications" ] && [ -e "/Applications/$APP" ] \
     && echo "Note: /Applications/$APP stays (not writable for you); the new one goes to $DEST." >&2
 if [ -e "$OLD" ]; then
-    # still running: it keeps running from the Trash until quit
-    pgrep -f "$OLD/Contents/MacOS/$EXEC" >/dev/null 2>&1 \
+    # still running: it keeps running from the Trash until quit (pgrep takes a regular
+    # expression: the path's + and . escaped; "[" last, as "[." in brackets starts a collating symbol)
+    pgrep -f "$(printf '%s' "$OLD/Contents/MacOS/$EXEC" | sed 's/[].*^$+?(){}|[]/\\&/g')" >/dev/null 2>&1 \
         && echo "The installed app is running: quit it and open it again to use the new one." >&2
-    # to the Trash (Put Back works): macOS 15's trash command, else the Finder (it may ask once
-    # whether Terminal may control it), else moved into ~/.Trash under a free name
-    if [ -x /usr/bin/trash ] && /usr/bin/trash "$OLD" 2>/dev/null; then
-        :
-    elif osascript -e 'on run argv' -e 'tell application "Finder" to delete (POSIX file (item 1 of argv) as alias)' \
-            -e 'end run' "$OLD" >/dev/null 2>&1; then
-        :
+    # to the Trash by the system: macOS 15's trash command, else its trash function
+    # (FileManager.trashItem) through osascript's JavaScript
+    if [ -x /usr/bin/trash ]; then
+        /usr/bin/trash "$OLD" || :
     else
-        T="$HOME/.Trash/$APP"
-        n=1
-        while [ -e "$T" ]; do n=$((n + 1)); T="$HOME/.Trash/IPMIView KeyPasta $n.app"; done
-        mv "$OLD" "$T" || { echo "Couldn't move $OLD to the Trash: the new app stays in $(pwd)." >&2; exit 1; }
+        osascript -l JavaScript -e 'ObjC.import("Foundation")' -e 'function run(argv) {
+            $.NSFileManager.defaultManager.trashItemAtURLResultingItemURLError($.NSURL.fileURLWithPath(argv[0]), null, null) }' \
+            "$OLD" >/dev/null || :
     fi
-    [ -e "$OLD" ] && { echo "$OLD is still there: the new app stays in $(pwd)." >&2; exit 1; }
+    [ -e "$OLD" ] && { echo "Couldn't move $OLD to the Trash: the new app stays in $(pwd)." >&2; exit 1; }
     echo "Moved the previous app to the Trash."
 fi
 mv "$APP" "$OLD"

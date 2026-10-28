@@ -1,5 +1,6 @@
-// IPMIView KeyPasta launcher — a stable macOS app bundle that starts IPMIView's KVM console
-// with the Java agent and (optionally) a relaxed TLS check for BMCs with an expired iKVM cert.
+// iKVM-KeyPasta launcher ("IPMIView+iKVM KeyPasta launcher.app") — a stable macOS app bundle that
+// starts IPMIView's KVM console with the Java agent and (optionally) a relaxed TLS check for BMCs
+// with an expired iKVM cert.
 //
 // Its purpose beyond the GUI: it is ONE fixed app identity. Grant Accessibility, Local Network
 // and the firewall to this app once; the viewer (java) and the
@@ -198,7 +199,21 @@ final class Model: ObservableObject {
         let fm = FileManager.default
         let homes = globFiles("/Library/Java/JavaVirtualMachines/*/Contents/Home")
                     .filter { fm.fileExists(atPath: $0 + "/bin/java") }
-        if let pick = homes.first(where: { $0.contains("temurin-11") || $0.contains("-11.") }) ?? homes.first {
+        // a Java's architecture: OS_ARCH in its release file (x86_64, aarch64); nil if there's none
+        func arch(_ home: String) -> String? {
+            guard let text = try? String(contentsOfFile: home + "/release", encoding: .utf8) else { return nil }
+            for line in text.split(separator: "\n") where line.hasPrefix("OS_ARCH=") {
+                return line.dropFirst("OS_ARCH=".count).trimmingCharacters(in: CharacterSet(charactersIn: "\" \r"))
+            }
+            return nil
+        }
+        // the viewer's native libraries are Intel only: x86_64 Javas, then those of unknown
+        // architecture, never arm64 ones. Among them 11 first, then 8 (newer ones refuse the
+        // .jnlp's options; temurin-8.jre, zulu-8.jdk, Oracle's jdk1.8.0_…), then any.
+        let intel = homes.filter { ["x86_64", "amd64"].contains(arch($0) ?? "") } + homes.filter { arch($0) == nil }
+        let java11 = intel.first { $0.contains("temurin-11") || $0.contains("-11.") }
+        let java8 = intel.first { $0.contains("-8.") || $0.contains("jdk1.8") || $0.contains("-1.8") }
+        if let pick = java11 ?? java8 ?? intel.first {
             intelJava = pick
         }
     }
@@ -601,7 +616,6 @@ final class Model: ObservableObject {
         return (dst, (path, data))
     }
 
-    // run.sh's "console-port: N"
     // launch.jnlp, launch (1).jnlp, launch-2.jnlp, launcher.jnlp ...: the newest (modified last)
     static func newestLaunchJnlp(in dir: String) -> String? {
         let fm = FileManager.default
@@ -612,6 +626,49 @@ final class Model: ObservableObject {
         return candidates.max { date($0) < date($1) }
     }
 
+    // The newest launch*.jnlp in Downloads, for the window's "Open Downloads/…" button. Kept
+    // current by a watch on the folder: a browser saves under a temporary name (or in a .download
+    // folder) and renames or moves the file, each a change of the folder's entries (writing into a
+    // file isn't). Looked at 0.3 s after the first change, so a burst of them is one look. Also
+    // whenever the app comes to the front, which starts the watch again if the folder couldn't be
+    // opened before (macOS asking for access to Downloads).
+    static let downloadsDir = NSHomeDirectory() + "/Downloads"
+    @Published var downloadsJnlp: String?
+    private var downloadsWatch: DispatchSourceFileSystemObject?
+    private var downloadsLookPending = false
+    private var activeObserver: NSObjectProtocol?
+
+    func watchDownloads() {
+        if activeObserver == nil {
+            activeObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+                self?.watchDownloads()
+            }
+        }
+        lookInDownloads()
+        guard downloadsWatch == nil else { return }
+        let fd = open(Model.downloadsDir, O_EVTONLY)
+        guard fd >= 0 else { return }
+        let src = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
+        src.setEventHandler { [weak self] in
+            guard let self, !self.downloadsLookPending else { return }
+            self.downloadsLookPending = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+                self?.downloadsLookPending = false
+                self?.lookInDownloads()
+            }
+        }
+        src.setCancelHandler { close(fd) }
+        src.resume()
+        downloadsWatch = src
+    }
+
+    private func lookInDownloads() {
+        let newest = Model.newestLaunchJnlp(in: Model.downloadsDir)
+        if newest != downloadsJnlp { downloadsJnlp = newest }
+    }
+
+    // run.sh's "console-port: N"
     static func startedPort(in output: String) -> Int? {
         for line in output.split(separator: "\n") where line.hasPrefix("console-port: ") {
             return Int(line.dropFirst("console-port: ".count).trimmingCharacters(in: .whitespaces))
@@ -1518,9 +1575,6 @@ struct MainView: View {
     @State private var optionHeld = false           // the Open buttons show their other way
     @State private var flagsMonitor: Any?
 
-    // The newest of the BMCs' launch.jnlp in Downloads: browsers save another one as
-    // "launch (1).jnlp" and so on
-    private var downloadsJnlp: String? { Model.newestLaunchJnlp(in: NSHomeDirectory() + "/Downloads") }
     private var logOpen: Bool { logShown }
 
     var body: some View {
@@ -1564,7 +1618,9 @@ struct MainView: View {
                 .onTapGesture { if !(m.useContainer && m.containerBusy) { m.openJnlp() } }
                 .onDrop(of: ["public.file-url"], isTargeted: $dropTargeted) { m.handleDrop($0) }
 
-            let newest = downloadsJnlp
+            // the newest of the BMCs' launch.jnlp in Downloads: browsers save another one as
+            // "launch (1).jnlp" and so on
+            let newest = m.downloadsJnlp
             Button { if let j = newest { m.launchJnlp(j, alternate: NSEvent.modifierFlags.contains(.option)) } } label: {
                 Label("Open Downloads/" + (newest.map { ($0 as NSString).lastPathComponent } ?? "launch.jnlp")
                       + (optionHeld && m.useContainer ? " " + m.alternateWhere : ""),
@@ -1686,6 +1742,7 @@ struct MainView: View {
             AppDelegate.model = m
             m.handleLaunchArgs()
             m.detectRunningContainers()
+            m.watchDownloads()
             if flagsMonitor == nil {
                 flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { e in
                     optionHeld = e.modifierFlags.contains(.option)
@@ -1834,7 +1891,7 @@ struct NativeSettings: View {
                 VStack(alignment: .leading, spacing: 4) {
                     PathRow(label: "Viewer Java", value: $m.intelJava, pickDirectory: true,
                             onDetect: { m.detectIntelJava(force: true) })
-                    SettingNote(text: "An x86_64 Java 11; it runs through Rosetta 2 (gone in macOS 28).")
+                    SettingNote(text: "An x86_64 Java 8 or 11; it runs through Rosetta 2 (gone in macOS 28).")
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     PathRow(label: "OpenWebStart", value: $m.javawsPath, pickDirectory: false,
@@ -2018,7 +2075,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if m.containerBusy { what.append("the container") }
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Quit IPMIView KeyPasta?"
+        alert.messageText = "Quit iKVM-KeyPasta?"
         alert.informativeText = "Still running: " + what.joined(separator: ", ")
             + ". Quitting closes them too, and their remote console connections are disconnected."
         alert.addButton(withTitle: "Cancel")
@@ -2040,16 +2097,16 @@ enum AboutApp {
     static let projectURL = URL(string: "https://github.com/Tabiskabis/iKVM-KeyPasta")!
 
     static func show() {
-        let center = NSMutableParagraphStyle()
-        center.alignment = .center
+        let left = NSMutableParagraphStyle()
+        left.alignment = .left
         let plain: [NSAttributedString.Key: Any] = [
             .font: NSFont.systemFont(ofSize: NSFont.smallSystemFontSize),
             .foregroundColor: NSColor.labelColor,
-            .paragraphStyle: center,
+            .paragraphStyle: left,
         ]
         let credits = NSMutableAttributedString(
             string: "Runs Supermicro's IPMIView and the BMCs' .jnlp iKVM viewers on this Mac, natively or "
-                + "in a container, with the iKVM-KeyPasta keyboard fixes and paste. Not affiliated with "
+                + "in a container, with the iKVM-KeyPasta keyboard fixes and paste.\nNot affiliated with "
                 + "Supermicro or ATEN.\n\n",
             attributes: plain)
         var link = plain
@@ -2066,7 +2123,7 @@ struct IPMIViewKeyPastaApp: App {
     @StateObject private var model = Model()
     var body: some Scene {
         // one window: no File › New Window, no tabs (Window, not WindowGroup; tabbing off)
-        Window("IPMIView KeyPasta", id: "main") {
+        Window("iKVM-KeyPasta", id: "main") {
             MainView(m: model)
         }
         .windowResizability(.contentSize)
@@ -2079,7 +2136,7 @@ struct IPMIViewKeyPastaApp: App {
             }
             // About: what the app is, and the project page; Help: the project page (no help book)
             CommandGroup(replacing: .appInfo) {
-                Button("About IPMIView KeyPasta") { AboutApp.show() }
+                Button("About iKVM-KeyPasta") { AboutApp.show() }
             }
             CommandGroup(replacing: .help) {
                 Button("iKVM-KeyPasta on GitHub") { NSWorkspace.shared.open(AboutApp.projectURL) }

@@ -11,7 +11,7 @@ Not part of the release, use at your own risk. How it works and why: [DOCUMENTAT
   - [OpenWebStart](https://openwebstart.com/download/): downloads the Java it needs itself.
   - IcedTea-Web (Debian/Ubuntu: `icedtea-netx`), a **Java 11** (e.g. `openjdk-11-jre`, or Temurin 11) and `python3`.
 - For BMCs with encrypted KVM: `libnsl.so.1`. Debian and Ubuntu have it; Fedora and others need `sudo dnf install libnsl`. Without it the console only says "connect failed sd:…". The launchers tell you when it's missing.
-- From a git clone: a JDK 9 or newer, so the installer can build the agent (`iKVM-KeyPasta-agent.jar`) if it isn't there.
+- From a git clone: a JDK 9 or newer, so the installer can build the agent (`iKVM-KeyPasta-agent.jar`). It builds it on every run; if that fails, it warns and installs the jar from the last build.
 
 ## Install
 
@@ -38,7 +38,7 @@ Run the installer again after updating iKVM-KeyPasta (`git pull`), so the new ag
   - With IcedTea-Web, its settings and the publishers you chose to always trust are in `~/.config/iKVM-KeyPasta/icedtea-web`, apart from OpenWebStart's.
 - **Paste:** `Alt+Shift+V` in the viewer, or your own hotkey (in the viewer: Options › KeyPasta Preferences, for all BMCs or one). These settings are in `~/.config/iKVM-KeyPasta/agent.properties`, one file for Linux, Windows and Mac: copy or sync it.
 
-**Launcher settings** (top of `jnlp-keypasta.sh`, or as environment variables): `JAVAWS` (which `javaws`: by default OpenWebStart's if installed, else the one in `PATH`), `ITWJAVA` (the Java for IcedTea-Web, by default the newest Java 11 in `/usr/lib/jvm`), `JAVAVERSION` (the Java OpenWebStart uses for the viewer, default `1.8*`), `VIEWERWAIT` (how long to wait for the viewer window before leaving the `.jnlp` in Downloads, default 300 seconds).
+**Launcher settings** (top of `jnlp-keypasta.sh`; `JAVAWS` and `ITWJAVA` also as environment variables): `JAVAWS` (which `javaws`: by default OpenWebStart's if installed, else the one in `PATH`), `ITWJAVA` (the Java for IcedTea-Web, by default the newest Java 11 in `/usr/lib/jvm`), `JAVAVERSION` (the Java OpenWebStart uses for the viewer, default `1.8*`), `VIEWERWAIT` (how long to wait for the viewer window before leaving the `.jnlp` in Downloads, default 300 seconds).
 
 ## Debugging
 
