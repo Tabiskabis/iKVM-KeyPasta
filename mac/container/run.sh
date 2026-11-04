@@ -188,7 +188,7 @@ $TABS && [ -z "$JNLP" ] && ARGS+=( -e "VIEWER_TABS=true" -p "${BIND}:6101-6199:6
 [ -n "$IPMIVIEW" ] && ARGS+=( -v "${IPMIVIEW}:/ipmiview" )
 # IPMIView's settings, shared with the native start (ipmiview-keypasta.sh keeps them there too)
 if [ "$(uname)" = Darwin ]; then SETTINGS="$HOME/Library/Application Support/IPMIView"
-else SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/ipmiview"; fi
+else SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/IPMIView"; fi
 mkdir -p "$SETTINGS" && ARGS+=( -v "${SETTINGS}:/settings" )
 # Files for the container go to a folder in the home folder first: Colima and Podman share only
 # the home folder (and a few others) with their Linux VM. The app's agent copy is in the temp folder

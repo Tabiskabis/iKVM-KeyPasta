@@ -100,10 +100,40 @@ final class Unbrand {
             Log.d("IPMIView logo's panel not found");
             return;
         }
+        int width = panel.getPreferredSize().width;
         top.remove(panel);
         top.revalidate();
         top.repaint();
         Log.d("IPMIView logo removed");
+        keepListWidth(f, width);
+    }
+
+    /**
+     * The BMC list's split pane (jSplitPane1) took its divider place from its left side's preferred
+     * width, which the logo set: without it the split pane sometimes laid the list out collapsed
+     * (divider at the left edge, seen under WSLg). Its place set to IPMIView's own default
+     * (dividerDefaultLoc: the logo's width + the divider), else the logo panel's width.
+     */
+    private static void keepListWidth(Frame f, int logoWidth) {
+        try {
+            Field splitField = f.getClass().getDeclaredField("jSplitPane1");
+            splitField.setAccessible(true);
+            javax.swing.JSplitPane split = (javax.swing.JSplitPane) splitField.get(f);
+            int place = 0;
+            try {
+                Field def = f.getClass().getDeclaredField("dividerDefaultLoc");
+                def.setAccessible(true);
+                place = def.getInt(f);
+            } catch (NoSuchFieldException e) {
+                // older IPMIView: the logo's width
+            }
+            if (place <= split.getDividerSize())
+                place = logoWidth + split.getDividerSize();
+            split.setDividerLocation(place);
+            Log.d("IPMIView BMC list " + place + " pixels wide");
+        } catch (Throwable t) {
+            Log.d("IPMIView BMC list width not set: " + t);
+        }
     }
 
     /** The label with an image and IPMIView's own mouse listener: the logo. */

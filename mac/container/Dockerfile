@@ -13,9 +13,11 @@
 # (javaws, itweb-settings: JAVA_HOME is their "custom JRE") and the .jnlp viewer in it. Not Java 8:
 # 26.04's IcedTea-Web is built against a newer Java and calls Java 9's
 # URLConnection.setDefaultUseCaches(String, boolean) (NoSuchMethodError on 8). Not newer than 11
-# for the viewer: its .jnlp asks for options Java 17 refuses (see the Windows launcher). Ubuntu's
-# IcedTea-Web package pulls in the default Java (25), unused: IcedTea-Web needs the security
-# manager, gone since Java 24.
+# for the viewer: its .jnlp asks for options Java 17 refuses (see the Windows launcher). IcedTea-Web
+# needs the security manager, gone since Java 24, yet its package depends on default-jre (Java 25,
+# ~200 MB, unused): a stand-in default-jre is recorded as installed (dpkg's status file, empty file
+# list and md5sums: dpkg --audit stays clean) before it, with default-java pointing at Java 11 as
+# default-jre-headless would. The build fails if any Java but 11 gets installed.
 FROM ubuntu:26.04
 # KeyPasta's images, so run.sh removes only their old, unnamed builds (docker image prune --filter)
 LABEL ikvm-keypasta=console
@@ -26,12 +28,19 @@ ENV DEBIAN_FRONTEND=noninteractive \
 ENV PATH=$JAVA_HOME/bin:$PATH
 RUN apt-get update && apt-get install -y --no-install-recommends \
         openjdk-11-jre \
-        tigervnc-standalone-server tigervnc-common tigervnc-tools websockify openbox tint2 xsettingsd curl \
+        tigervnc-standalone-server tigervnc-common tigervnc-tools websockify openbox tint2 xsettingsd \
         x11-xserver-utils x11-utils x11-xkb-utils \
         libxext6 libxrender1 libxtst6 libxi6 libxft2 libfreetype6 fontconfig fonts-dejavu-core \
         libssl3t64 stunnel4 \
-        icedtea-netx \
         python3 ca-certificates tzdata procps \
+    && printf '%s\n' 'Package: default-jre' 'Status: install ok installed' 'Priority: optional' \
+        'Section: java' 'Maintainer: iKVM-KeyPasta' 'Architecture: all' 'Version: 2:0-keypasta' \
+        'Description: stand-in: Java 11 serves IcedTea-Web, not the default Java' '' \
+        >> /var/lib/dpkg/status \
+    && : > /var/lib/dpkg/info/default-jre.list && : > /var/lib/dpkg/info/default-jre.md5sums \
+    && ln -sfn java-11-openjdk-amd64 /usr/lib/jvm/default-java \
+    && apt-get install -y --no-install-recommends icedtea-netx \
+    && ! dpkg-query -W -f '${db:Status-Abbrev} ${Package}\n' 'openjdk-*' | grep '^ii' | grep -v ' openjdk-11-' \
     && update-alternatives --set java "$JAVA_HOME/bin/java" \
     && java -version 2>&1 | grep -q '"11\.' \
     && perl -pi -e 's/^fullversion=`\$\{JAVA\} -version 2>&1`/fullversion=`env -u JAVA_TOOL_OPTIONS \$\{JAVA\} -version 2>&1`/' \
@@ -67,7 +76,7 @@ RUN ln -sf /usr/share/novnc/vnc.html /usr/share/novnc/index.html \
 COPY keypasta-websockify /usr/local/bin/keypasta-websockify
 # bmc-check HOST: whether a BMC answers from here as IPMIView needs it (UDP 623, TCP ports)
 COPY bmc-check /usr/local/bin/bmc-check
-# keypasta-vncauth: the VNC port for apps, taking any password (macOS's Screen Sharing wants one)
+# keypasta-vncauth: the VNC port for apps, taking any password (VNC apps that insist on asking for one)
 COPY keypasta-vncauth /usr/local/bin/keypasta-vncauth
 # keypasta-jnlp-jars: a .jnlp's jars from the BMC, Pack200 ones unpacked (Java 11's unpack200)
 COPY keypasta-jnlp-jars /usr/local/bin/keypasta-jnlp-jars

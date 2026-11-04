@@ -18,8 +18,10 @@
 # window has opened from it (the agent creates the file KEYPASTA_VIEWER_OPENED names when the
 # viewer's window shows, which it builds after connecting and logging in), within VIEWERWAIT
 # seconds, and if it's still the same file (the browser then saves the next one under the same
-# name). Any other outcome (no window, no agent) leaves it there for another try. Other .jnlp
-# files: javaws, unchanged.
+# name). Any other outcome (no window, no agent) leaves it there for another try. A copy opened
+# again, from that folder or anywhere else (known by its name), is started where it is (not
+# copied, moved or changed again; with IcedTea-Web the jars fetched for it are used again).
+# Other .jnlp files: javaws, unchanged.
 #
 # javaws: $JAVAWS, else OpenWebStart's in its usual install folders, else javaws in PATH (often
 # IcedTea-Web's, Debian/Ubuntu package icedtea-netx). Which one it is: by its real path
@@ -124,9 +126,31 @@ if ! { ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null; } | grep -q 'li
     command -v notify-send >/dev/null && notify-send -i ikvm-keypasta "iKVM Viewer" "libnsl.so.1 is missing: the encrypted console won't connect (Fedora: sudo dnf install libnsl)."
 fi
 
-# The .jnlp copied out of Downloads, named after date, time and the BMC (from its codebase)
 COPYDIR="${XDG_CACHE_HOME:-$HOME/.cache}/iKVM-KeyPasta"
 (umask 077 && mkdir -p "$COPYDIR") || fail "Can't create $COPYDIR."
+# A copy made by a launcher, opened again (or IcedTea-Web's local .jnlp of one): started as it is,
+# no new copy, nothing changed in it, nothing to remove. Known by its folder (this one) or its name
+# (launch-<date>-<time>-<BMC>-<number>.jnlp: also one kept or moved elsewhere, left where it is).
+AGAIN=false
+INCOPYDIR=false
+[ "$(readlink -f "$(dirname "$JNLP")")" = "$(readlink -f "$COPYDIR")" ] && INCOPYDIR=true AGAIN=true
+case "$(basename "$JNLP")" in
+    launch-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]-*-[0-9]*.jnlp) AGAIN=true ;;
+esac
+if $AGAIN; then
+    case "$JNLP" in
+        *-local.jnlp) COPY="${JNLP%-local.jnlp}.jnlp" ;;
+        *) COPY="$JNLP" ;;
+    esac
+    # IcedTea-Web's files for it: here, next to it if it's here
+    BASE="$COPYDIR/$(basename "${COPY%.jnlp}")"
+    # counts as opened now (with what was fetched for it; one elsewhere stays untouched), then
+    # copies not opened for a week: deleted
+    touch -c "$BASE-local.jnlp" "$BASE-jars"
+    $INCOPYDIR && touch -c "$COPY"
+    find "$COPYDIR" -mindepth 1 -maxdepth 1 -name 'launch-*' -mtime +6 -exec rm -rf {} + 2>/dev/null || true
+else
+# The .jnlp copied out of Downloads, named after date, time and the BMC (from its codebase)
 BMC="$(grep -o -i -m1 'codebase="[a-z]*://[^/"]*' "$JNLP" | sed -e 's|.*://||' -e 's|:[0-9]*$||' -e 's|[^A-Za-z0-9.-]|_|g')"
 COPY="$COPYDIR/launch-$(date +%Y%m%d-%H%M%S)-${BMC:-unknown}-$RANDOM.jnlp"
 (umask 077 && cp "$JNLP" "$COPY") || fail "Couldn't copy $JNLP to $COPY."
@@ -135,6 +159,8 @@ SUM="$(cksum < "$COPY")"     # the original's, before the copy is changed below
 # opened now
 touch "$COPY"
 find "$COPYDIR" -mindepth 1 -maxdepth 1 -name 'launch-*' -mtime +6 -exec rm -rf {} + 2>/dev/null || true
+BASE="${COPY%.jnlp}"
+fi
 
 LOG=""
 if $DEBUG; then
@@ -147,7 +173,7 @@ fi
 
 if [ "$KIND" = ows ]; then
     # the Java version the .jnlp asks for (<j2se version="..."> or <java version="...">)
-    if [ -n "$JAVAVERSION" ]; then
+    if [ -n "$JAVAVERSION" ] && ! $AGAIN; then
         sed -i -E "s/(<(j2se|java)[^>]*[[:space:]]version[[:space:]]*=[[:space:]]*)([\"'])[^\"']*([\"'])/\\1\\3$JAVAVERSION\\4/" "$COPY"
     fi
     # A -javaagent path that doesn't exist stops every Java program, and JAVA_TOOL_OPTIONS can't
@@ -182,9 +208,13 @@ else
     [ -f "$FETCH" ] || FETCH="$HERE/../mac/container/keypasta-jnlp-jars"     # in the repository
     [ -f "$FETCH" ] || fail "keypasta-jnlp-jars missing next to $0: install again (install.sh)."
     command -v python3 >/dev/null || fail "IcedTea-Web needs python3 here (to fetch the console's files from the BMC)."
-    JARS="${COPY%.jnlp}-jars"
-    LOCAL="${COPY%.jnlp}-local.jnlp"
-    (umask 077 && JAVA_HOME="$ITWJAVA" python3 "$FETCH" "$COPY" "$JARS" "$LOCAL") \
+    JARS="$BASE-jars"
+    LOCAL="$BASE-local.jnlp"
+    # (a copy opened again: what was fetched for it, if it's there; a local .jnlp: that one, it
+    # names its jars itself)
+    case "$JNLP" in *-local.jnlp) LOCAL="$JNLP" ;; esac
+    { $AGAIN && [ -f "$LOCAL" ] && { [ "$LOCAL" = "$JNLP" ] || [ -d "$JARS" ]; }; } \
+        || (umask 077 && JAVA_HOME="$ITWJAVA" python3 "$FETCH" "$COPY" "$JARS" "$LOCAL") \
         || fail "Couldn't fetch the console's files from the BMC (see above). The .jnlp is valid a minute or two only: download a new one if it's older."
     # Its own profile: settings and trusted publishers in ~/.config/iKVM-KeyPasta/icedtea-web,
     # its Java set there (deployment.jre.dir: the Rust javaws takes it before JAVA_HOME), the shell
@@ -221,10 +251,10 @@ fi
 # The .jnlp in Downloads: removed once the agent has created OPENED (the viewer's window is
 # showing), if it's still the same file; kept if javaws (IcedTea-Web's, which runs the viewer
 # itself) ended first, or after VIEWERWAIT seconds. OpenWebStart's javaws may hand the viewer to
-# a JVM of its own and return, so only the time counts there.
+# a JVM of its own and return, so only the time counts there. A copy opened again: nothing to do.
 OPENED="${COPY%.jnlp}.opened"
 rm -f "$OPENED"
-export KEYPASTA_VIEWER_OPENED="$OPENED"
+$AGAIN || export KEYPASTA_VIEWER_OPENED="$OPENED"
 watch_viewer() {
     local javaws="$1" i=0
     while [ $i -lt $((VIEWERWAIT * 5)) ]; do
@@ -247,7 +277,7 @@ if $DEBUG; then
     [ -n "$LOG" ] && echo "Agent log: $LOG (Ctrl+C ends the display, not the viewer)"
 fi
 "${START[@]}" &
-watch_viewer $! &
+$AGAIN || watch_viewer $! &
 # Debug: the log followed until Ctrl+C, which ends only the display (programs started in the
 # background here ignore it); else: until javaws and the watch have ended
 if [ -n "$LOG" ]; then

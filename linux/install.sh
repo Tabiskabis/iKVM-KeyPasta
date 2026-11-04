@@ -10,7 +10,7 @@
 # ~/.local/share, ~/.local/lib, ~/.local/bin, ~/Applications/IPMIView, ~/Applications,
 # /opt/SUPERMICRO, /opt, /usr/local/share or /usr/share (see ipmiview-keypasta.sh). A new IPMIView
 # needs no new install: unpack its download into one of them (e.g. ~/.local/share). Its settings
-# (BMC list, saved logins) are in ~/.config/ipmiview, the same for every version.
+# (BMC list, saved logins) are in ~/.config/IPMIView, the same for every version.
 #
 #   for you (--user, the default; no root needed): ~/.local/share/iKVM-KeyPasta (agent,
 #     starters), ~/.local/share/applications, ~/.local/share/icons, ~/.local/bin/ipmiview.
@@ -81,8 +81,7 @@ remove() {
     for s in $SIZES; do $AS rm -f "$ICONS/${s}x$s/apps/ikvm-keypasta.png"; done
     $AS rm -f "$ICONS/32x32/apps/ipmiview-keypasta.png"
     if [ -d "$DEST" ]; then
-        # ipmiview-folder: written by earlier versions
-        $AS rm -f "$DEST/ipmiview-keypasta.sh" "$DEST/jnlp-keypasta.sh" "$DEST/keypasta-jnlp-jars" "$DEST/iKVM-KeyPasta-agent.jar" "$DEST/ipmiview-folder"
+        $AS rm -f "$DEST/ipmiview-keypasta.sh" "$DEST/jnlp-keypasta.sh" "$DEST/keypasta-jnlp-jars" "$DEST/iKVM-KeyPasta-agent.jar"
         $AS rmdir "$DEST" 2>/dev/null || echo "$DEST kept: other files in it."
     fi
     refresh
@@ -248,7 +247,6 @@ $AS install -m 755 "$HERE/ipmiview-keypasta.sh" "$DEST/ipmiview-keypasta.sh"
 $AS install -m 755 "$HERE/jnlp-keypasta.sh" "$DEST/jnlp-keypasta.sh"
 # the .jnlp's jars for IcedTea-Web (shared with the Mac app's container)
 $AS install -m 755 "$ROOT/mac/container/keypasta-jnlp-jars" "$DEST/keypasta-jnlp-jars"
-$AS rm -f "$DEST/ipmiview-folder"                   # written by earlier versions
 
 # The icons, then the menu entries with this install's paths. The entries name their icon by its
 # full path, not by name: WSLg (Linux apps in Windows' Start menu and taskbar) looks names up in

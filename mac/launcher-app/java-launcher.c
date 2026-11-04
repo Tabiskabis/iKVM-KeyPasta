@@ -17,6 +17,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <sys/mman.h>
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#include <mach-o/nlist.h>
 #include <dispatch/dispatch.h>
 #include <objc/message.h>
 #include <objc/runtime.h>
@@ -331,6 +335,299 @@ void Java_keypasta_MacMenuBar_noQuitShortcut0(void *env, void *cls) {
     (void) env;
     (void) cls;
     dispatch_async_f(dispatch_get_main_queue(), NULL, removeQuitShortcut);
+}
+
+// An IOKit object (io_object_t), for MacHid below.
+typedef uint32_t io_object_k;
+
+// keypasta.MacHid.guard0(): keeps iKVM's macOS library (libiKVM*.jnilib) from quitting the viewer.
+// Its LED code (manipulate_led: for every lock key, getLEDstate, setLEDstate, changeLEDstate) opens
+// the keyboard as a HID device: IOCreatePlugInInterfaceForService, the device interface, then its
+// elements (find_led_cookies), and calls exit(1) when that last call fails, as it does without the
+// Input Monitoring permission. A failure of the first call it takes quietly (as for a Mac without
+// a keyboard): no LED read, the lock state taken as off. So its import of that first call (used for
+// nothing else in it) is pointed here: the same steps as the library's, and when the elements are
+// refused, the plug-in released and kIOReturnNotPermitted. Everything else as before. The library
+// is found by its viewer function among the loaded images, now and as it loads (dyld calls back).
+// 0 done, -1 IOKit not found.
+
+typedef struct { uint8_t bytes[16]; } uuid_k;  // CFUUIDBytes, passed by value as COM's REFIID
+typedef int (*IOCreatePlugIn_t)(io_object_k service, const void *pluginType, const void *interfaceType,
+                                void ***plugin, int32_t *score);
+typedef int32_t (*QueryInterface_t)(void *self, uuid_k iid, void **out);
+typedef uint32_t (*ReleaseCOM_t)(void *self);
+typedef int (*CopyMatchingElements_t)(void *self, const void *matching, const void **elements);
+static IOCreatePlugIn_t realCreatePlugIn;
+static void (*cfRelease)(const void *object);
+static int hidRefusedLogged;
+
+static void **comTable(void *handle) {
+    return *(void ***) handle;                  // an IOKit COM handle points to its function table
+}
+
+static int guardedCreatePlugIn(io_object_k service, const void *pluginType, const void *interfaceType,
+                               void ***plugin, int32_t *score) {
+    int r = realCreatePlugIn(service, pluginType, interfaceType, plugin, score);
+    if (r != 0 || plugin == NULL || *plugin == NULL)
+        return r;
+    // kIOHIDDeviceInterfaceID, as the library asks for it (create_hid_interface)
+    static const uuid_k deviceInterface = {{0x78, 0xBD, 0x42, 0x0C, 0x6F, 0x14, 0x11, 0xD4,
+                                            0x94, 0x74, 0x00, 0x05, 0x02, 0x8F, 0x18, 0xD5}};
+    void *plug = *plugin, *device = NULL;
+    if (((QueryInterface_t) comTable(plug)[1])(plug, deviceInterface, &device) != 0 || device == NULL)
+        return r;                               // the library fails there itself, quietly
+    const void *elements = NULL;
+    // copyMatchingElements: entry 20 (offset 0xa0, as the library calls it), Release entry 3
+    int refused = ((CopyMatchingElements_t) comTable(device)[20])(device, NULL, &elements);
+    if (elements != NULL && cfRelease != NULL)
+        cfRelease(elements);
+    ((ReleaseCOM_t) comTable(device)[3])(device);
+    if (refused == 0)
+        return r;
+    ((ReleaseCOM_t) comTable(plug)[3])(plug);   // what IODestroyPlugInInterface does
+    *plugin = NULL;
+    if (!hidRefusedLogged) {
+        hidRefusedLogged = 1;
+        char line[160];
+        snprintf(line, sizeof line, "keyboard LEDs not readable (HID error 0x%x, no Input Monitoring): the viewer goes on without them", (unsigned) refused);
+        addLog(line);
+    }
+    return (int) 0xe00002e2;                    // kIOReturnNotPermitted
+}
+
+static void guardImage(const struct mach_header *header, intptr_t slide) {
+    Dl_info info;                               // macOS' own libraries: not scanned
+    if (header->magic != MH_MAGIC_64 || (dladdr(header, &info) != 0 && info.dli_fname != NULL
+            && (strncmp(info.dli_fname, "/System/", 8) == 0 || strncmp(info.dli_fname, "/usr/lib/", 9) == 0)))
+        return;
+    const struct mach_header_64 *h = (const struct mach_header_64 *) header;
+    const struct segment_command_64 *linkedit = NULL;
+    const struct symtab_command *symtab = NULL;
+    const struct dysymtab_command *dysymtab = NULL;
+    const struct load_command *lc = (const struct load_command *) (h + 1);
+    for (uint32_t i = 0; i < h->ncmds; i++, lc = (const struct load_command *) ((const char *) lc + lc->cmdsize)) {
+        if (lc->cmd == LC_SEGMENT_64 && strcmp(((const struct segment_command_64 *) lc)->segname, SEG_LINKEDIT) == 0)
+            linkedit = (const struct segment_command_64 *) lc;
+        else if (lc->cmd == LC_SYMTAB)
+            symtab = (const struct symtab_command *) lc;
+        else if (lc->cmd == LC_DYSYMTAB)
+            dysymtab = (const struct dysymtab_command *) lc;
+    }
+    if (linkedit == NULL || symtab == NULL || dysymtab == NULL || dysymtab->nindirectsyms == 0)
+        return;
+    const char *base = (const char *) (slide + linkedit->vmaddr - linkedit->fileoff);
+    const struct nlist_64 *symbols = (const struct nlist_64 *) (base + symtab->symoff);
+    const char *names = base + symtab->stroff;
+    const uint32_t *indirect = (const uint32_t *) (base + dysymtab->indirectsymoff);
+    int viewer = 0;                             // iKVM's library: it defines the viewer's keyboard function
+    for (uint32_t i = 0; i < symtab->nsyms && !viewer; i++)
+        viewer = (symbols[i].n_type & N_TYPE) == N_SECT
+            && strcmp(names + symbols[i].n_un.n_strx, "_Java_tw_com_aten_ikvm_ui_RemoteVideo_keyboardAction") == 0;
+    if (!viewer)
+        return;
+    lc = (const struct load_command *) (h + 1);
+    for (uint32_t i = 0; i < h->ncmds; i++, lc = (const struct load_command *) ((const char *) lc + lc->cmdsize)) {
+        if (lc->cmd != LC_SEGMENT_64)
+            continue;
+        const struct segment_command_64 *seg = (const struct segment_command_64 *) lc;
+        const struct section_64 *sect = (const struct section_64 *) (seg + 1);
+        for (uint32_t s = 0; s < seg->nsects; s++, sect++) {
+            uint32_t type = sect->flags & SECTION_TYPE;
+            if (type != S_LAZY_SYMBOL_POINTERS && type != S_NON_LAZY_SYMBOL_POINTERS)
+                continue;
+            void **slots = (void **) (slide + sect->addr);
+            for (uint64_t k = 0; k < sect->size / sizeof(void *); k++) {
+                uint32_t sym = indirect[sect->reserved1 + k];
+                if (sym & (INDIRECT_SYMBOL_ABS | INDIRECT_SYMBOL_LOCAL) || sym >= symtab->nsyms)
+                    continue;
+                if (strcmp(names + symbols[sym].n_un.n_strx, "_IOCreatePlugInInterfaceForService") != 0)
+                    continue;
+                if (!(seg->initprot & VM_PROT_WRITE)) {     // __DATA_CONST in newer libraries
+                    long page = sysconf(_SC_PAGESIZE);
+                    uintptr_t start = (uintptr_t) &slots[k] & ~(uintptr_t) (page - 1);
+                    if (mprotect((void *) start, (size_t) page, PROT_READ | PROT_WRITE) != 0)
+                        continue;
+                }
+                slots[k] = (void *) guardedCreatePlugIn;
+                addLog("iKVM's keyboard LED code guarded (no exit without Input Monitoring)");
+            }
+        }
+    }
+}
+
+__attribute__((visibility("default"), used))
+int32_t Java_keypasta_MacHid_guard0(void *env, void *cls) {
+    (void) env;
+    (void) cls;
+    void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
+    void *cf = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_NOW);
+    realCreatePlugIn = iokit == NULL ? NULL : (IOCreatePlugIn_t) dlsym(iokit, "IOCreatePlugInInterfaceForService");
+    cfRelease = cf == NULL ? NULL : (void (*)(const void *)) dlsym(cf, "CFRelease");
+    if (realCreatePlugIn == NULL)
+        return -1;
+    _dyld_register_func_for_add_image(guardImage);  // called for every image already loaded, too
+    return 0;
+}
+
+// keypasta.MacCapsKey: the Caps Lock key itself, down and up, for the Toggle keys mode Passthrough.
+// AppKit reports Caps Lock only as the lock changing (Java: a press when it goes on, a release when
+// it goes off), never the key going up. The keyboard's own reports have it (as Karabiner's
+// EventViewer shows): an IOHIDManager on every keyboard (generic desktop page 1, usage 6), on a
+// thread with its own run loop, keeps the keyboard page's Caps Lock (page 7, usage 0x39) changes in
+// a queue the agent takes them from (next0, blocking). macOS allows this only with the Input
+// Monitoring permission (the Mac app asks for it, not this). The agent sends the keys only while a
+// viewer has the focus; the reports come whatever program is in front, nothing else is kept or
+// logged. All IOKit and CoreFoundation calls through dlsym, as above (no SDK headers, no linking).
+
+typedef void (*HIDValueCallback_t)(void *context, int result, void *sender, void *value);
+static struct {
+    void *(*managerCreate)(const void *allocator, uint32_t options);
+    void (*setDeviceMatching)(void *manager, const void *matching);
+    void (*registerInputValueCallback)(void *manager, HIDValueCallback_t callback, void *context);
+    void (*scheduleWithRunLoop)(void *manager, void *runLoop, const void *mode);
+    int (*open)(void *manager, uint32_t options);
+    void *(*valueGetElement)(void *value);
+    long (*valueGetIntegerValue)(void *value);
+    uint32_t (*elementGetUsagePage)(void *element);
+    uint32_t (*elementGetUsage)(void *element);
+    int (*checkAccess)(int requestType);
+    int (*requestAccess)(int requestType);
+    void *(*dictionaryCreateMutable)(const void *allocator, long capacity, const void *keyCallBacks,
+                                     const void *valueCallBacks);
+    void (*dictionarySetValue)(void *dict, const void *key, const void *value);
+    void *(*numberCreate)(const void *allocator, long type, const void *valuePtr);
+    void *(*stringCreate)(const void *allocator, const char *text, uint32_t encoding);
+    void *(*runLoopGetCurrent)(void);
+    void (*runLoopRun)(void);
+    const void *keyCallBacks, *valueCallBacks, *defaultMode;
+} hid;
+static pthread_mutex_t capsLock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t capsCond = PTHREAD_COND_INITIALIZER;
+static int capsQueue[64], capsHead, capsCount;
+enum { CAPS_STARTING = 0x7fffffff };
+static int capsState = CAPS_STARTING;           // then 0 open, else why not (see start0)
+static int capsStarted;
+
+static void capsValue(void *context, int result, void *sender, void *value) {
+    (void) context;
+    (void) result;
+    (void) sender;
+    void *element = hid.valueGetElement(value);
+    if (element == NULL || hid.elementGetUsagePage(element) != 7 || hid.elementGetUsage(element) != 0x39)
+        return;
+    pthread_mutex_lock(&capsLock);
+    if (capsCount < (int) (sizeof capsQueue / sizeof capsQueue[0])) {
+        capsQueue[(capsHead + capsCount) % (sizeof capsQueue / sizeof capsQueue[0])] = hid.valueGetIntegerValue(value) != 0;
+        capsCount++;
+        pthread_cond_broadcast(&capsCond);
+    }
+    pthread_mutex_unlock(&capsLock);
+}
+
+static void *capsThread(void *unused) {
+    (void) unused;
+    void *manager = hid.managerCreate(NULL, 0);
+    void *match = hid.dictionaryCreateMutable(NULL, 0, hid.keyCallBacks, hid.valueCallBacks);
+    int page = 1, usage = 6;                    // generic desktop, keyboard
+    hid.dictionarySetValue(match, hid.stringCreate(NULL, "DeviceUsagePage", 0x08000100),
+                           hid.numberCreate(NULL, 9, &page));       // kCFNumberIntType, UTF-8
+    hid.dictionarySetValue(match, hid.stringCreate(NULL, "DeviceUsage", 0x08000100),
+                           hid.numberCreate(NULL, 9, &usage));
+    hid.setDeviceMatching(manager, match);
+    hid.registerInputValueCallback(manager, capsValue, NULL);
+    hid.scheduleWithRunLoop(manager, hid.runLoopGetCurrent(), hid.defaultMode);
+    int r = hid.open(manager, 0);
+    pthread_mutex_lock(&capsLock);
+    capsState = r == 0 ? 0 : r;
+    pthread_cond_broadcast(&capsCond);
+    pthread_mutex_unlock(&capsLock);
+    // kIOReturnExclusiveAccess: a keyboard is seized by another program (Karabiner-Elements does
+    // that to every physical one); the others (its virtual keyboard among them) are open and report
+    if (r == 0 || r == (int) 0xe00002c5)
+        hid.runLoopRun();                       // for good: the reports come here
+    return NULL;
+}
+
+// keypasta.MacCapsKey.start0(): 0 the keyboards are open, 1 Input Monitoring not granted (not
+// asked for here: the app does), -1 IOKit not usable, else IOHIDManagerOpen's error (0xe00002c5: some
+// keyboards held by another program, the others read). Once per program,
+// later calls answer the same.
+__attribute__((visibility("default"), used))
+int32_t Java_keypasta_MacCapsKey_start0(void *env, void *cls) {
+    (void) env;
+    (void) cls;
+    pthread_mutex_lock(&capsLock);
+    if (capsStarted) {
+        while (capsState == CAPS_STARTING)
+            pthread_cond_wait(&capsCond, &capsLock);
+        int r = capsState;
+        pthread_mutex_unlock(&capsLock);
+        return r;
+    }
+    capsStarted = 1;
+    pthread_mutex_unlock(&capsLock);
+    void *iokit = dlopen("/System/Library/Frameworks/IOKit.framework/IOKit", RTLD_NOW);
+    void *cf = dlopen("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation", RTLD_NOW);
+    int r = -1;
+    if (iokit != NULL && cf != NULL) {
+        *(void **) &hid.managerCreate = dlsym(iokit, "IOHIDManagerCreate");
+        *(void **) &hid.setDeviceMatching = dlsym(iokit, "IOHIDManagerSetDeviceMatching");
+        *(void **) &hid.registerInputValueCallback = dlsym(iokit, "IOHIDManagerRegisterInputValueCallback");
+        *(void **) &hid.scheduleWithRunLoop = dlsym(iokit, "IOHIDManagerScheduleWithRunLoop");
+        *(void **) &hid.open = dlsym(iokit, "IOHIDManagerOpen");
+        *(void **) &hid.valueGetElement = dlsym(iokit, "IOHIDValueGetElement");
+        *(void **) &hid.valueGetIntegerValue = dlsym(iokit, "IOHIDValueGetIntegerValue");
+        *(void **) &hid.elementGetUsagePage = dlsym(iokit, "IOHIDElementGetUsagePage");
+        *(void **) &hid.elementGetUsage = dlsym(iokit, "IOHIDElementGetUsage");
+        *(void **) &hid.checkAccess = dlsym(iokit, "IOHIDCheckAccess");
+        *(void **) &hid.requestAccess = dlsym(iokit, "IOHIDRequestAccess");
+        *(void **) &hid.dictionaryCreateMutable = dlsym(cf, "CFDictionaryCreateMutable");
+        *(void **) &hid.dictionarySetValue = dlsym(cf, "CFDictionarySetValue");
+        *(void **) &hid.numberCreate = dlsym(cf, "CFNumberCreate");
+        *(void **) &hid.stringCreate = dlsym(cf, "CFStringCreateWithCString");
+        *(void **) &hid.runLoopGetCurrent = dlsym(cf, "CFRunLoopGetCurrent");
+        *(void **) &hid.runLoopRun = dlsym(cf, "CFRunLoopRun");
+        hid.keyCallBacks = dlsym(cf, "kCFTypeDictionaryKeyCallBacks");
+        hid.valueCallBacks = dlsym(cf, "kCFTypeDictionaryValueCallBacks");
+        const void **mode = (const void **) dlsym(cf, "kCFRunLoopDefaultMode");
+        hid.defaultMode = mode == NULL ? NULL : *mode;
+        if (hid.managerCreate && hid.setDeviceMatching && hid.registerInputValueCallback && hid.scheduleWithRunLoop
+                && hid.open && hid.valueGetElement && hid.valueGetIntegerValue && hid.elementGetUsagePage
+                && hid.elementGetUsage && hid.dictionaryCreateMutable && hid.dictionarySetValue && hid.numberCreate
+                && hid.stringCreate && hid.runLoopGetCurrent && hid.runLoopRun && hid.keyCallBacks
+                && hid.valueCallBacks && hid.defaultMode)
+            r = 0;
+    }
+    // kIOHIDRequestTypeListenEvent 1; access: 0 granted, 1 denied, 2 never answered
+    // never asked from here: the Mac app asks, once per version of it (the user: not at every start)
+    if (r == 0 && hid.checkAccess != NULL && hid.checkAccess(1) != 0)
+        r = 1;
+    pthread_t thread;
+    if (r == 0 && pthread_create(&thread, NULL, capsThread, NULL) != 0)
+        r = -1;
+    pthread_mutex_lock(&capsLock);
+    if (r != 0)
+        capsState = r;
+    while (capsState == CAPS_STARTING)
+        pthread_cond_wait(&capsCond, &capsLock);
+    r = capsState;
+    pthread_mutex_unlock(&capsLock);
+    return r;
+}
+
+// keypasta.MacCapsKey.next0(): waits for the next Caps Lock report: 1 down, 0 up.
+__attribute__((visibility("default"), used))
+int32_t Java_keypasta_MacCapsKey_next0(void *env, void *cls) {
+    (void) env;
+    (void) cls;
+    pthread_mutex_lock(&capsLock);
+    while (capsCount == 0)
+        pthread_cond_wait(&capsCond, &capsLock);
+    int down = capsQueue[capsHead];
+    capsHead = (capsHead + 1) % (int) (sizeof capsQueue / sizeof capsQueue[0]);
+    capsCount--;
+    pthread_mutex_unlock(&capsLock);
+    return down;
 }
 
 int main(int argc, char **argv) {

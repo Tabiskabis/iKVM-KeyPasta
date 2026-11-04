@@ -10,7 +10,6 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.InputStream;
 import java.lang.reflect.Method;
-import java.util.Locale;
 import javax.imageio.ImageIO;
 
 /**
@@ -35,13 +34,9 @@ final class Icons {
     private Icons() {
     }
 
-    static boolean isMac() {
-        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("mac");
-    }
-
     /** From the class loading of IPMIView's main class: AWT only from a thread of its own. */
     static synchronized void ipmiviewDock() {
-        if (done || !isMac())
+        if (done || !Config.MAC)
             return;
         done = true;
         Thread t = new Thread(new Runnable() {
@@ -115,7 +110,7 @@ final class Icons {
             return;
         if (!icons.equals(w.getIconImages()))
             w.setIconImages(icons);
-        if (isMac() && !viewerDockSet) {
+        if (Config.MAC && !viewerDockSet) {
             viewerDockSet = true;
             watchAppearance(icons.get(icons.size() - 1));
         }
@@ -163,13 +158,11 @@ final class Icons {
 
     private static boolean darkMode() {
         try {
-            Process p = new ProcessBuilder("/usr/bin/defaults", "read", "-g", "AppleInterfaceStyle")
-                .redirectErrorStream(true).start();
-            InputStream in = p.getInputStream();
-            byte[] buf = new byte[64];
-            int n = in.read(buf);
-            p.waitFor();
-            return n > 0 && new String(buf, 0, n, "UTF-8").trim().equalsIgnoreCase("Dark");
+            // exit code 1 (no such key: light mode) gives no lines
+            for (String line : LocalLayouts.command("/usr/bin/defaults", "read", "-g", "AppleInterfaceStyle"))
+                if (line.trim().equalsIgnoreCase("Dark"))
+                    return true;
+            return false;
         } catch (Exception e) {
             return true;    // the default icon
         }

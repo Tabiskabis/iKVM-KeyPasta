@@ -24,7 +24,7 @@ Without an argument it takes the newest IPMIView already installed, or the newes
 - **Just for you** (default, no root): `~/.local/share/iKVM-KeyPasta`, menu entries, and the command `ipmiview` in `~/.local/bin`.
 - **For all users:** `--system` (asks for sudo): `/opt/iKVM-KeyPasta`, IPMIView in `/opt`. Everyone keeps their own BMC list and logins.
 - **`.jnlp` files:** it asks whether iKVM Viewer should open them (`--jnlp`: yes without asking, `--no-jnlp`: leave it). Other `.jnlp` files still go to your Web Start unchanged.
-- **Remove:** `bash linux/install.sh --remove`. IPMIView's folders stay.
+- **Remove:** `bash linux/uninstall.sh` (the same as `bash linux/install.sh --remove`). IPMIView's folders stay.
 
 **New IPMIView version:** unpack its download into `~/.local/share` (for all users: `/opt`). The newest one there is what starts, no new install needed.
 
@@ -32,7 +32,7 @@ Run the installer again after updating iKVM-KeyPasta (`git pull`), so the new ag
 
 ## Use
 
-- **IPMIView** from the app menu or `ipmiview`, then open a BMC's console from it as usual. Its BMC list and saved logins are in `~/.config/ipmiview`, the same for every IPMIView version.
+- **IPMIView** from the app menu or `ipmiview`, then open a BMC's console from it as usual. Its BMC list and saved logins are in `~/.config/IPMIView`, the same for every IPMIView version.
 - **`.jnlp` files:** open one (with iKVM Viewer as the program for `.jnlp`, a double-click or the browser's "Open" does it), or start **iKVM Viewer** from the menu: it opens the newest `launch.jnlp` in Downloads (also `launch (1).jnlp` and so on).
   - The viewer runs from a copy in `~/.cache/iKVM-KeyPasta/`, readable by you only, kept for a week. The `.jnlp` in Downloads is removed only once a viewer window has opened from it, so the next download gets the same name again. If no window opens, it stays there for another try.
   - With IcedTea-Web, its settings and the publishers you chose to always trust are in `~/.config/iKVM-KeyPasta/icedtea-web`, apart from OpenWebStart's.

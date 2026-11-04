@@ -67,7 +67,7 @@ final class Widen {
                         } catch (Throwable t) {
                             Log.d("IPMIView login convenience not installed: " + t);
                         }
-                        if (Icons.isMac() || Config.LINUX)    // their fonts: Fonts
+                        if (Config.MAC || Config.LINUX)    // their fonts: Fonts
                             watch();
                         else
                             watchMain();
@@ -147,11 +147,11 @@ final class Widen {
                     Log.d("IPMIView window maximised: left as it is");
                     return;
                 }
-                int width = Math.min(Icons.isMac() ? 1144 : w.getPreferredSize().width + 1 + (Config.LINUX ? 60 : 20), screen.width);
+                int width = Math.min(Config.MAC ? 1144 : w.getPreferredSize().width + 1 + (Config.LINUX ? 60 : 20), screen.width);
                 int x = Math.max(screen.x, Math.min(w.getX() - (width - w.getWidth()) / 2, screen.x + screen.width - width));
                 Log.d("IPMIView window " + w.getWidth() + " -> " + width + " wide");
                 w.setBounds(x, w.getY(), width, w.getHeight());
-                if (Icons.isMac() && w instanceof javax.swing.RootPaneContainer)
+                if (Config.MAC && w instanceof javax.swing.RootPaneContainer)
                     mainEdges(((javax.swing.RootPaneContainer) w).getContentPane());
                 w.validate();
             }

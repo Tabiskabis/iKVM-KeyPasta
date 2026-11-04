@@ -1,16 +1,16 @@
 package keypasta;
 
 /**
- * Rewrites the viewer's bytecode so the window never forces itself on top: ATEN calls
+ * Bytecode changes at load time, for the viewer and IPMIView (each method below says what and
+ * why), all by plain byte manipulation, no bytecode library. Any parsing surprise returns the
+ * class unchanged. The first one: the window never forces itself on top: ATEN calls
  * {@code parent.setAlwaysOnTop(true)} on every (re)connect (RemoteVideo.connectionRetry), which
  * buries the virtual-media and options dialogs. This flips the constant pushed before each
- * {@code setAlwaysOnTop(Z)} call in the class from 1 (true) to 0 (false), at load time.
- *
- * Pure byte manipulation, no bytecode library: it finds the constant-pool method references named
- * "setAlwaysOnTop", then walks each method's Code instruction by instruction and, where an
- * {@code iconst_1} is immediately followed by an {@code invokevirtual} of one of those references,
- * changes the {@code iconst_1} to {@code iconst_0}. Any parsing surprise returns the class
- * unchanged (the agent's runtime veto then still applies).
+ * {@code setAlwaysOnTop(Z)} call in the class from 1 (true) to 0 (false): it finds the
+ * constant-pool method references named "setAlwaysOnTop", then walks each method's Code
+ * instruction by instruction and, where an {@code iconst_1} is immediately followed by an
+ * {@code invokevirtual} of one of those references, changes the {@code iconst_1} to
+ * {@code iconst_0} (unchanged class: the agent's runtime veto in Menu still applies).
  */
 final class Patch {
     private static final int ICONST_0 = 0x03, ICONST_1 = 0x04, INVOKEVIRTUAL = 0xB6;
@@ -140,7 +140,7 @@ final class Patch {
     };
 
     /**
-     * macOS: every call of the viewer's own native keyboard and LED methods (keyboardAction,
+     * Every OS: every call of the viewer's own native keyboard and LED methods (keyboardAction,
      * getLEDstate, setLEDstate, changeLEDstate) becomes a call of the static method of the same
      * name in keypasta.Native, the viewer object as first argument: invokevirtual/invokespecial
      * #ref -> invokestatic #hook, 3 bytes each, so no offset in the code changes. The new constant
@@ -196,6 +196,7 @@ final class Patch {
         String[][] targets = "IPMIView20/iKVMLunchar".equals(name)
             ? new String[][] {
                 {"com/supermicro/ipmi/stunnel/StunnelUtility", "checkOS", "()Ljava/lang/String;", "static"},
+                {"com/supermicro/ipmi/ConfigAccessor", "getProperty", "(Ljava/lang/String;)Ljava/lang/String;", "object"},
                 {"java/lang/Runtime", "exec", "(Ljava/lang/String;)Ljava/lang/Process;"}}
             : new String[][] {
                 {"com/supermicro/ipmi/stunnel/StunnelParameters", "setStunnelIP", "(Ljava/lang/String;)V", "object"},

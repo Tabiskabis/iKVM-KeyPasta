@@ -101,7 +101,7 @@ else
     sed -i '' -e '/^#SOME#/d' -e 's/^#NONE# //' "$TMPW"
 fi
 if ! cmp -s "$TMPW" BMCSecurity/mac/stunnel 2>/dev/null; then
-    # (removed first: the earlier copy of Homebrew's binary is read-only, r-xr-xr-x)
+    # (removed first: cp can't overwrite a read-only file)
     rm -f BMCSecurity/mac/stunnel &&
         cp "$TMPW" BMCSecurity/mac/stunnel && chmod 755 BMCSecurity/mac/stunnel ||
         fail "Couldn't write $IPMIVIEW/BMCSecurity/mac/stunnel."
@@ -121,7 +121,7 @@ fi
 
 # the agent for IPMIView and the viewers it starts (they inherit the variable)
 if [ -f "$AGENT" ]; then
-    # AGENT_ARGS: agent options (the app passes its log file and the paste hotkey)
+    # AGENT_ARGS: agent options (the app passes its log file when its debug logs are on)
     export JAVA_TOOL_OPTIONS="-javaagent:$AGENT${AGENT_ARGS:+=$AGENT_ARGS}"
 else
     echo "$AGENT not found: starting without the agent (the encrypted console won't open)."
@@ -143,16 +143,11 @@ fi
 # more) go to ~/Library/Application Support/IPMIView, not the IPMIView folder: they survive an
 # IPMIView update. IPMIView runs in its folder (it finds its files relative to the folder it runs
 # in) and gets the settings folder as its second argument; the agent sends the settings files
-# IPMIView opens by bare name there too (KEYPASTA_IPMIVIEW_SETTINGS, see SettingsFolder). A
-# settings file missing there is copied from the IPMIView folder as a starting point. Not
+# IPMIView opens by bare name there too (KEYPASTA_IPMIVIEW_SETTINGS, see SettingsFolder). Nothing
+# is copied or moved there from the IPMIView folder: bringing earlier settings over is up to you. Not
 # $XDG_CONFIG_HOME: the app sets it for IcedTea-Web's own profile.
 DATA="$HOME/Library/Application Support/IPMIView"
 mkdir -p "$DATA" || fail "Couldn't create $DATA."
-find "$DATA" -maxdepth 1 -type l -exec rm -f {} + 2>/dev/null   # links of the earlier way
-for f in IPMIView.properties account.properties email.properties language.properties proxy.properties \
-        smcrakp.properties sort.properties timeout.properties update.properties version.properties; do
-    [ -f "$IPMIVIEW/$f" ] && [ ! -e "$DATA/$f" ] && cp -p "$IPMIVIEW/$f" "$DATA/$f"
-done
 export KEYPASTA_IPMIVIEW_SETTINGS="$DATA/"
 
 # IPMIView20.lax's class path. Its menus in the Mac's menu bar, as Mac apps have

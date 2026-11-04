@@ -27,6 +27,8 @@ import java.util.WeakHashMap;
  *   until the mouse moved over the viewer or the app was switched. See focusWhenNoneIs. (macOS
  *   rejects focus requests while the app isn't in front: CPlatformWindow.rejectFocusRequest.)
  *   Redrawing the Mac menu bar when its menus change is MacMenuBar.watch's, natively.
+ * - Windows: a window left blocked by a modal dialog that's gone (disabled: no clicks, menus or
+ *   keys) is unblocked. See staleBlock.
  */
 final class ViewerWatch {
     /**
@@ -55,11 +57,13 @@ final class ViewerWatch {
     private ViewerWatch() {
     }
 
-    static void install(final boolean mac) {
+    static void install(final boolean mac, final boolean windows) {
         if (mac) {
             macFields();
             MacMenuBar.watch();
         }
+        if (windows)
+            windowsFields();
         javax.swing.Timer t = new javax.swing.Timer(500, new java.awt.event.ActionListener() {
             @Override
             public void actionPerformed(java.awt.event.ActionEvent e) {
@@ -81,6 +85,8 @@ final class ViewerWatch {
                         }
                         if (modalBlocker != null)
                             modalState(w);
+                        if (winBlocker != null)
+                            staleBlock(w);
                         if (mac)
                             focusWhenNoneIs(w, "viewer");
                     } catch (Throwable ex) {
@@ -154,6 +160,70 @@ final class ViewerWatch {
         } catch (Throwable t) {
             Log.d("viewer watch: no modal state: " + t);
             modalBlocker = null;
+        }
+    }
+
+    private static Field winBlocker, winPeer, peerModalBlocker;
+    private static Method unblockWindow, setModalBlocked, modalEnable;
+    private static final Map<Window, Boolean> staleSeen = new WeakHashMap<Window, Boolean>();
+
+    private static void windowsFields() {
+        Agent.openDesktop("java.awt");
+        Agent.openDesktop("sun.awt.windows");
+        try {
+            winBlocker = Window.class.getDeclaredField("modalBlocker");
+            winBlocker.setAccessible(true);
+            winPeer = Component.class.getDeclaredField("peer");
+            winPeer.setAccessible(true);
+            unblockWindow = Dialog.class.getDeclaredMethod("unblockWindow", Window.class);
+            unblockWindow.setAccessible(true);
+            setModalBlocked = Window.class.getDeclaredMethod("setModalBlocked", Dialog.class, boolean.class, boolean.class);
+            setModalBlocked.setAccessible(true);
+            Class<?> wpeer = Class.forName("sun.awt.windows.WWindowPeer");
+            modalEnable = wpeer.getDeclaredMethod("modalEnable", Dialog.class);
+            modalEnable.setAccessible(true);
+            peerModalBlocker = wpeer.getDeclaredField("modalBlocker");
+            peerModalBlocker.setAccessible(true);
+        } catch (Throwable t) {
+            Log.d("viewer watch: no modal state: " + t);
+            winBlocker = null;
+        }
+    }
+
+    /**
+     * Windows: the .jnlp viewer's window sometimes opened blocked by a modal dialog that was gone
+     * (no click activated it, its menus and keys dead, until the viewer was started again): the
+     * native window disabled, AWT's SunAwtModalBlockerProp on it naming a window that no longer
+     * existed. Unblocking never reached it. Java still blocking it with a dialog that isn't showing,
+     * on two ticks in a row (a second): unblocked as the dialog's hiding would. Java not blocking
+     * it: the native side told so again whenever the window isn't focused (WWindowPeer.modalEnable:
+     * the blocker property removed, the window enabled unless Java has it disabled; nothing when it
+     * isn't blocked). Under the tree lock, as AWT's own blocking.
+     */
+    private static void staleBlock(Window w) throws Exception {
+        if (w.isFocused())
+            return;
+        synchronized (w.getTreeLock()) {
+            Dialog blocker = (Dialog) winBlocker.get(w);
+            if (blocker != null) {
+                if (blocker.isVisible() || staleSeen.put(w, Boolean.TRUE) == null)
+                    return;
+                staleSeen.remove(w);
+                unblockWindow.invoke(blocker, w);
+                if (winBlocker.get(w) != null)
+                    setModalBlocked.invoke(w, blocker, false, true);
+                Log.d("viewer window unblocked: still blocked by a " + blocker.getClass().getName() + " that wasn't showing");
+                return;
+            }
+            staleSeen.remove(w);
+            Object peer = winPeer.get(w);
+            if (peer == null || !modalEnable.getDeclaringClass().isInstance(peer))
+                return;
+            if (peerModalBlocker.get(peer) != null) {
+                peerModalBlocker.set(peer, null);
+                Log.d("viewer window: its peer still had a modal blocker, Java none");
+            }
+            modalEnable.invoke(peer, (Object) null);
         }
     }
 

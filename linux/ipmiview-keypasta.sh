@@ -3,13 +3,12 @@
 # (IPMIView.desktop, see install.sh) and as the command ipmiview.
 #
 # IPMIView's settings (IPMIView.properties: the BMC list; account.properties: saved IDs and
-# passwords; a few more) are kept in ~/.config/ipmiview (under $XDG_CONFIG_HOME), the same for
+# passwords; a few more) are kept in ~/.config/IPMIView (under $XDG_CONFIG_HOME), the same for
 # every IPMIView version; IPMIView's own folder stays as unpacked. IPMIView runs in its folder (it
 # finds its files relative to the folder it runs in) and gets the settings folder as its second
 # argument; the agent sends the settings files IPMIView opens by bare name there too
-# (KEYPASTA_IPMIVIEW_SETTINGS). A settings file missing there is copied from IPMIView's folder as
-# a starting point (e.g. a BMC list set up there), account.properties (saved passwords) only from
-# an IPMIView folder of your own.
+# (KEYPASTA_IPMIVIEW_SETTINGS). Nothing is copied or moved there from IPMIView's folder:
+# bringing earlier settings over is up to you.
 #
 #   ipmiview-keypasta.sh [-d|--debug] [IPMIView folder]     (install.sh links it as ipmiview)
 #
@@ -87,15 +86,8 @@ else
     LOG=""
 fi
 
-SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/ipmiview"
+SETTINGS="${XDG_CONFIG_HOME:-$HOME/.config}/IPMIView"
 mkdir -p "$SETTINGS" || fail "Can't create $SETTINGS for IPMIView's settings."
-find "$SETTINGS" -maxdepth 1 -type l -exec rm -f {} + 2>/dev/null   # links of the earlier way
-for f in IPMIView.properties account.properties email.properties language.properties proxy.properties \
-        smcrakp.properties sort.properties timeout.properties update.properties version.properties; do
-    [ -f "$IPMIVIEW/$f" ] && [ ! -e "$SETTINGS/$f" ] || continue
-    [ "$f" = account.properties ] && [ ! -O "$IPMIVIEW" ] && continue
-    cp -p "$IPMIVIEW/$f" "$SETTINGS/$f"
-done
 export KEYPASTA_IPMIVIEW_SETTINGS="$SETTINGS/"
 # IPMIView's tunnel for encrypted consoles (BMCSecurity/linux/stunnel64, also the one the .jnlp
 # viewer brings) needs libnsl.so.1, an old glibc library (Fedora and others: a package of its own).
@@ -105,7 +97,13 @@ if ! { ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null; } | grep -q 'li
 fi
 cd "$IPMIVIEW" || exit 1
 if [ -z "$LOG" ]; then
-    exec ./IPMIView20 - "$SETTINGS/"
+    # detached: the command returns at once, IPMIView keeps running when the terminal closes
+    if command -v setsid >/dev/null 2>&1; then
+        setsid -f ./IPMIView20 - "$SETTINGS/" </dev/null >/dev/null 2>&1
+    else
+        nohup ./IPMIView20 - "$SETTINGS/" </dev/null >/dev/null 2>&1 &
+    fi
+    exit 0
 fi
 
 # Debug: IPMIView in the foreground (its output here), the agent's log followed alongside; Ctrl+C

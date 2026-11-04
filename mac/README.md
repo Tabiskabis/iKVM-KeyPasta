@@ -31,6 +31,7 @@ Move `IPMIView+iKVM KeyPasta launcher.app` to Applications and open it (right-cl
 - **Launch IPMIView**, then open a BMC's console from it as usual. With IPMIView's container running, the same button opens its console, in a VNC app or the browser (Preferences › Container › Consoles; Option-click for the other one).
 - **`.jnlp` files**: drop one on the app's window, click the drop area to choose one, or open the newest `launch.jnlp` in Downloads (also `launch (1).jnlp` and so on; the button shows which). An iKVM `.jnlp` is moved to `~/Library/Caches/iKVM-KeyPasta/` when it's successfully opened, so the next download gets the same name again.
 - **Paste:** `Option+Shift+V` or `Cmd+Shift+V` in the viewer, or your own hotkey (in the viewer: Options › KeyPasta Preferences, for all BMCs or one). In the container's browser view it pastes your Mac's clipboard; Chrome and Edge ask once whether they may read it. After that the clipboard is shared both ways there: copy in the container, paste on the Mac, and the other way round.
+- **Caps Lock** (in the viewer: Options › KeyPasta Preferences › Toggle keys): with "Passthrough" the remote gets Caps Lock down and up as you press and release it. That needs Input Monitoring: the app asks for it once at the first start of each new version, later in Preferences › Native. Without it each toggle arrives as a quick press, and the status dot is yellow. After a rebuild of the app macOS may want it again.
 - **Keyboard layout in the container** (for IPMIView's own fields): the Mac's, when a container starts; a layout of your own isn't recognized: choose it in Preferences › Container.
 - **Alt next to the space bar:** in the viewer, Options › KeyPasta Preferences swaps Option and Command (for all BMCs or one). These settings are the same natively and in the container, in `~/Library/Application Support/iKVM-KeyPasta/agent.properties` (one file for Mac, Windows and Linux: copy or sync it).
 - The container and the native start share IPMIView's BMC list and saved logins (in `~/Library/Application Support/IPMIView`). The container keeps the publishers you chose to always trust there too; right-click its desktop for IcedTea-Web's settings.
@@ -57,4 +58,4 @@ Move `IPMIView+iKVM KeyPasta launcher.app` to Applications and open it (right-cl
 
 ## Known bugs
 
-CapsLock sometimes toggles twice, natively and in the container. The menu bar items that sometimes didn't show (a macOS 27 issue) appear since agent 3.5.0. All open issues: [Known issues](../DOCUMENTATION.md#16-known-issues) in the documentation.
+The menu bar items that sometimes didn't show (a macOS 27 issue) appear since agent 3.5.0. All open issues: [Known issues](../DOCUMENTATION.md#16-known-issues) in the documentation.

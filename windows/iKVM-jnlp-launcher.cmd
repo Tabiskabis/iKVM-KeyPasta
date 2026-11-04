@@ -16,7 +16,8 @@
 ::     answered with another admin account), named launch-<date>-<time>-<BMC>-<random>.jnlp, and
 ::     kept there for a week after it was last opened (older ones are deleted at each start).
 ::     Opened again, it works only as long as the BMC accepts the console session's login data
-::     in it. The original is deleted only once a viewer window has opened from it (the agent
+::     in it; it's started as it is then (no new copy, nothing changed in it), also when it was
+::     kept or moved elsewhere (known by its name). The original is deleted only once a viewer window has opened from it (the agent
 ::     creates the file KEYPASTA_VIEWER_OPENED names when the viewer's window shows, which it
 ::     builds after connecting and logging in) within VIEWERWAIT seconds, and only if it's
 ::     unchanged: out of Downloads, the browser saves the next one under the same name. Any other
@@ -27,6 +28,9 @@
 ::                                         then choose it once: a .jnlp file, Open with,
 ::                                         Choose another app, "iKVM-KeyPasta launcher", Always
 ::   iKVM-jnlp-launcher.cmd /unregister   remove that again
+::   iKVM-jnlp-launcher.cmd /debug [file] as usual, with the agent's debug log in
+::                                         %TEMP%\iKVM-KeyPasta\agent.log (the previous one: .old),
+::                                         shown live in this window (closing it leaves the viewer)
 ::
 :: Keep this file next to iKVM-KeyPasta-agent.jar, in a folder only admins can write to
 :: (%ProgramFiles%\iKVM-KeyPasta\): it runs as admin. Not there: the jar one folder up (the repo:
@@ -49,6 +53,11 @@ set "USERTEMP=%TEMP%"
 set "SELF=%~f0"
 set "PROGID=iKVM-KeyPasta.jnlp"
 set "ICON=%~dp0PPCH_outlined_dark.ico"
+rem /debug first: the rest as without it (shift after SELF: it moves %0 too)
+set "DEBUG="
+set "LOG="
+if /i "%~1"=="/debug" set "DEBUG=1"
+if defined DEBUG shift
 
 rem without a file: the newest launch*.jnlp in Downloads (browsers save another one as
 rem "launch (1).jnlp" and so on)
@@ -63,6 +72,7 @@ rem the restart as admin gets the user's .jnlp and %TEMP% passed on
 if /i "%~1"=="/elevated" (
     set "JNLP=%~2"
     set "USERTEMP=%~3"
+    if "%~4"=="debug" set "DEBUG=1"
 ) else if not "%~1"=="" (
     set "JNLP=%~f1"
 )
@@ -73,7 +83,7 @@ if not exist "%JNLP%" (
     exit /b 1
 )
 if not exist "%OWS%\javaws.exe" (
-    >&2 echo OpenWebStart not found in "%OWS%": adjust OWS at the top of this file ^(%~f0^)
+    >&2 echo OpenWebStart not found in "%OWS%": adjust OWS at the top of "%SELF%"
     pause
     exit /b 1
 )
@@ -96,7 +106,9 @@ if /i "%~1"=="/elevated" (
 rem Through cmd /c ""script" args": started directly, Windows runs a .cmd as cmd /C "script" args,
 rem and cmd then strips the first and the last quote of that line whenever there are more than
 rem two quotes or a ( ) & etc. in the path: the script isn't found (window flashes and closes).
-powershell -NoProfile -Command "$q = [char]34; Start-Process -Verb RunAs -FilePath $env:ComSpec -ArgumentList ('/c ' + $q + $q + $env:SELF + $q + ' /elevated ' + $q + $env:JNLP + $q + ' ' + $q + $env:USERTEMP + $q + $q)" >nul 2>&1
+set "DEBUGARG=nodebug"
+if defined DEBUG set "DEBUGARG=debug"
+powershell -NoProfile -Command "$q = [char]34; Start-Process -Verb RunAs -FilePath $env:ComSpec -ArgumentList ('/c ' + $q + $q + $env:SELF + $q + ' /elevated ' + $q + $env:JNLP + $q + ' ' + $q + $env:USERTEMP + $q + ' ' + $env:DEBUGARG + $q)" >nul 2>&1
 if errorlevel 1 (
     >&2 echo Not started: the UAC prompt was declined.
     pause
@@ -117,6 +129,7 @@ set "PATHREST="
 rem (no ( ) block here: a ")" in the path, like "Program Files (x86)", would end it)
 if not exist "%AGENT%" goto :noagent
 set "JAVA_TOOL_OPTIONS=-javaagent:"%AGENT%""
+if defined DEBUG call :debuglog
 goto :start
 :noagent
 >&2 echo "%AGENT%" not found: starting without the agent.
@@ -127,6 +140,19 @@ rem The .jnlp to the user's %TEMP%, named after date, time and the BMC (address 
 rem used, from its codebase, characters not allowed in file names as _)
 set "COPYDIR=%USERTEMP%\iKVM-KeyPasta"
 if not exist "%COPYDIR%" mkdir "%COPYDIR%"
+rem A copy made by this launcher, opened again: started where it is (no new copy, nothing changed
+rem in it, nothing to delete). Known by its folder (this one; compared by their short names: %TEMP%
+rem often is one) or its name (launch-<date>-<time>-<BMC>-<number>.jnlp: also one kept or moved
+rem elsewhere, left as it is).
+set "JNLPDIR="
+set "COPYDIRS="
+set "INCOPYDIR="
+for %%F in ("%JNLP%") do set "JNLPDIR=%%~sdpF"
+for %%F in ("%COPYDIR%") do set "COPYDIRS=%%~sfF\"
+if /i "%JNLPDIR%"=="%COPYDIRS%" set "INCOPYDIR=1"
+if defined INCOPYDIR goto :again
+powershell -NoProfile -Command "if ((Split-Path -Leaf $env:JNLP) -match '^launch-\d{8}-\d{6}-.+-\d+\.jnlp$') { exit 0 } else { exit 1 }" >nul 2>&1
+if not errorlevel 1 goto :again
 set "NAME="
 for /f "usebackq delims=" %%N in (`powershell -NoProfile -Command "$h = 'unknown'; if ((Get-Content -LiteralPath $env:JNLP -Raw) -match 'codebase=.[a-z]+://([^/''\x22]+)') { $h = $Matches[1] -replace ':\d+$', '' -replace '[^A-Za-z0-9.-]', '_' }; 'launch-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '-' + $h + '-' + ('{0:D6}' -f (Get-Random -Maximum 1000000))"`) do set "NAME=%%N"
 if not defined NAME set "NAME=launch-%RANDOM%%RANDOM%"
@@ -138,7 +164,7 @@ if not exist "%COPY%" (
     exit /b 1
 )
 rem Copies not opened for a week: deleted. This one counts as opened now (its date set to now).
-powershell -NoProfile -Command "$old = (Get-Date).AddDays(-7); Get-ChildItem -LiteralPath $env:COPYDIR -Filter 'launch-*.jnlp' | Where-Object { $_.LastWriteTime -lt $old } | Remove-Item -Force -ErrorAction SilentlyContinue; (Get-Item -LiteralPath $env:COPY).LastWriteTime = Get-Date" >nul 2>&1
+powershell -NoProfile -Command "$old = (Get-Date).AddDays(-7); Get-ChildItem -LiteralPath $env:COPYDIR -Filter 'launch-*' -File | Where-Object { $_.LastWriteTime -lt $old } | Remove-Item -Force -ErrorAction SilentlyContinue; (Get-Item -LiteralPath $env:COPY).LastWriteTime = Get-Date" >nul 2>&1
 rem the Java version the .jnlp asks for (<j2se version="..."> or <java version="...">)
 if defined JAVAVERSION powershell -NoProfile -Command "$f = $env:COPY; $t = [IO.File]::ReadAllText($f); [IO.File]::WriteAllText($f, ($t -replace '(<(?:j2se|java)\b[^>]*?\bversion\s*=\s*)([\x22''])[^\x22'']*\2', ('${1}${2}' + $env:JAVAVERSION + '${2}')))" >nul 2>&1
 rem The agent creates KEYPASTA_VIEWER_OPENED's file once the viewer's window shows (the viewer
@@ -148,6 +174,38 @@ rem OpenWebStart started by a hidden PowerShell, which then waits for that file 
 rem original .jnlp, if it's still the one copied (its hash taken before, as the copy was changed
 rem above). This window closes meanwhile.
 start "" powershell -NoProfile -WindowStyle Hidden -Command "$o = $env:KEYPASTA_VIEWER_OPENED; Remove-Item -LiteralPath $o -Force -ErrorAction SilentlyContinue; $h = (Get-FileHash -LiteralPath $env:JNLP).Hash; Start-Process -FilePath ($env:OWS + '\javaws.exe') -ArgumentList ([char]34 + $env:COPY + [char]34); $end = (Get-Date).AddSeconds([int]$env:VIEWERWAIT); while ((Get-Date) -lt $end) { if (Test-Path -LiteralPath $o) { Remove-Item -LiteralPath $o -Force -ErrorAction SilentlyContinue; if ((Get-FileHash -LiteralPath $env:JNLP -ErrorAction SilentlyContinue).Hash -eq $h) { Remove-Item -LiteralPath $env:JNLP -Force }; break }; Start-Sleep -Milliseconds 500 }"
+if defined LOG goto :showlog
+exit /b
+
+:again
+rem One here counts as opened now (its date set to now first; one elsewhere stays untouched), then
+rem copies not opened for a week: deleted
+set "COPY=%JNLP%"
+powershell -NoProfile -Command "if ($env:INCOPYDIR) { (Get-Item -LiteralPath $env:COPY).LastWriteTime = Get-Date }; $old = (Get-Date).AddDays(-7); Get-ChildItem -LiteralPath $env:COPYDIR -Filter 'launch-*' -File | Where-Object { $_.LastWriteTime -lt $old } | Remove-Item -Force -ErrorAction SilentlyContinue" >nul 2>&1
+start "" "%OWS%\javaws.exe" "%COPY%"
+if defined LOG goto :showlog
+exit /b
+
+rem /debug: the agent's log (options: "jar=log=path"; a "," would end the path), the previous one
+rem kept as .old. Every Java program of this start writes into it (appending).
+:debuglog
+set "LOG=%USERTEMP%\iKVM-KeyPasta\agent.log"
+if not "%LOG:,=%"=="%LOG%" goto :nolog
+if not exist "%USERTEMP%\iKVM-KeyPasta" mkdir "%USERTEMP%\iKVM-KeyPasta"
+if exist "%LOG%" copy /y "%LOG%" "%LOG%.old" >nul
+type nul > "%LOG%"
+set "JAVA_TOOL_OPTIONS=-javaagent:"%AGENT%=log=%LOG%""
+exit /b 0
+:nolog
+>&2 echo No debug log: the path has a comma ("%LOG%").
+set "LOG="
+exit /b 0
+
+rem /debug: the log shown live; closing this window ends only that
+:showlog
+echo Agent log: "%LOG%"
+echo Shown live below. Closing this window doesn't close the viewer.
+powershell -NoProfile -Command "Get-Content -LiteralPath $env:LOG -Wait -Tail 50"
 exit /b
 
 rem Offered for .jnlp files of this user: a ProgID with this script as open command, listed in

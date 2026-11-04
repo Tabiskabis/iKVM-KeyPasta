@@ -14,6 +14,7 @@ import AppKit
 import Darwin
 import UniformTypeIdentifiers
 import Carbon.HIToolbox
+import IOKit.hid
 
 // MARK: - glob helper
 func globFiles(_ pattern: String) -> [String] {
@@ -163,8 +164,6 @@ final class Model: ObservableObject {
     func launched(ipmiview: Bool) {
         if ipmiview { launchingIPMIView = false } else { launchingJnlp = max(0, launchingJnlp - 1) }
     }
-
-    func autodetect(force: Bool) { detectIPMIView(force: force); detectIntelJava(force: force) }
 
     func detectIPMIView(force: Bool) {
         guard force || ipmiview.isEmpty else { return }
@@ -340,10 +339,11 @@ final class Model: ObservableObject {
         env["XDG_CONFIG_HOME"] = Model.owsProfileConfig
         env["XDG_CACHE_HOME"]  = Model.owsProfileCache
         if !effectiveAgent.isEmpty { env["JAVA_TOOL_OPTIONS"] = "-javaagent:\(effectiveAgent)" + (agentArgs.isEmpty ? "" : "=" + agentArgs) }
-        // the agent creates this file once the viewer's window shows (see watchViewerStart)
+        // the agent creates this file once the viewer's window shows (see watchViewerStart); only
+        // when there's an original to remove then (else nothing would remove the file)
         let opened = (path as NSString).deletingPathExtension + ".opened"
         try? fm.removeItem(atPath: opened)
-        env["KEYPASTA_VIEWER_OPENED"] = opened
+        if taken.original != nil { env["KEYPASTA_VIEWER_OPENED"] = opened }
 
         var launched = false
         if let r = ws.range(of: ".app/Contents/") {
@@ -458,7 +458,7 @@ final class Model: ObservableObject {
     // A console's address (noVNC), plain: connecting at once, the desktop following the window
     // and the paste hotkey are set in the container (Dockerfile, entrypoint.sh). noVNC doesn't
     // reconnect by default (a viewer's tab: its desktop is gone with the viewer).
-    func consoleURL(_ port: Int, tab: Bool = false) -> String {
+    func consoleURL(_ port: Int) -> String {
         "http://localhost:\(port)/"
     }
 
@@ -571,25 +571,33 @@ final class Model: ObservableObject {
     // (it holds the console session's login data), and kept there for a week after it was last
     // opened (older ones are deleted here), as on Windows and Linux. The original (with its content)
     // is returned too: deleted once a viewer has started from the copy (watchViewerStart), so the
-    // browser gives the next one the same name. Other .jnlp files, one already there, or a failed
-    // copy: used where they are (no original).
+    // browser gives the next one the same name. Other .jnlp files, one already there or named as a
+    // copy (launch-<date>-<time>-<BMC>-<number>.jnlp, wherever it is), or a failed copy: used where
+    // they are (no original).
     static func takeJnlp(_ path: String) -> (path: String, original: (path: String, data: Data)?) {
         let fm = FileManager.default
         let dir = NSHomeDirectory() + "/Library/Caches/iKVM-KeyPasta"
         guard let data = fm.contents(atPath: path) else { return (path, nil) }
         let text = String(decoding: data, as: UTF8.self)
         guard text.range(of: "tw.com.aten.ikvm", options: .caseInsensitive) != nil else { return (path, nil) }
-        // copies not opened for a week: deleted; this one counts as opened now
+        // copies not opened for a week: deleted; this one counts as opened now. Also the agent's
+        // .opened files left over (a viewer window that opened after viewerWait)
         let weekAgo = Date().addingTimeInterval(-7 * 24 * 3600)
         for name in (try? fm.contentsOfDirectory(atPath: dir)) ?? []
-                where name.hasPrefix("launch-") && name.hasSuffix(".jnlp") {
+                where name.hasPrefix("launch-") && (name.hasSuffix(".jnlp") || name.hasSuffix(".opened")) {
             let f = dir + "/" + name
             if f != path, let d = (try? fm.attributesOfItem(atPath: f))?[.modificationDate] as? Date, d < weekAgo {
                 try? fm.removeItem(atPath: f)
             }
         }
-        if (path as NSString).deletingLastPathComponent == dir {
+        if ((path as NSString).deletingLastPathComponent as NSString).resolvingSymlinksInPath
+            == (dir as NSString).resolvingSymlinksInPath {
             try? fm.setAttributes([.modificationDate: Date()], ofItemAtPath: path)
+            return (path, nil)
+        }
+        // a copy made by a launcher (by its name), kept or moved elsewhere: used where it is, untouched
+        if (path as NSString).lastPathComponent.range(of: #"^launch-[0-9]{8}-[0-9]{6}-.+-[0-9]+(-local)?\.jnlp$"#,
+                                                      options: .regularExpression) != nil {
             return (path, nil)
         }
         do {
@@ -666,6 +674,51 @@ final class Model: ObservableObject {
     private func lookInDownloads() {
         let newest = Model.newestLaunchJnlp(in: Model.downloadsDir)
         if newest != downloadsJnlp { downloadsJnlp = newest }
+        refreshInputMonitoring()
+    }
+
+    // Input Monitoring: the agent's Passthrough reads Caps Lock from the keyboard (MacCapsKey in
+    // java-launcher.c), which macOS allows only with it. macOS asks for it for the app: the viewers
+    // are its children, so the app's permission is theirs. Asked once at the app's first launch,
+    // again from Preferences › Native; looked at whenever the app comes to the front (System
+    // Settings is where it's changed) and every second for a minute after asking.
+    enum InputMonitoring { case granted, denied, unknown }
+    @Published var inputMonitoring: InputMonitoring = Model.inputMonitoringNow()
+
+    static func inputMonitoringNow() -> InputMonitoring {
+        switch IOHIDCheckAccess(kIOHIDRequestTypeListenEvent) {
+        case kIOHIDAccessTypeGranted: return .granted
+        case kIOHIDAccessTypeDenied: return .denied
+        default: return .unknown
+        }
+    }
+
+    func refreshInputMonitoring() {
+        let now = Model.inputMonitoringNow()
+        if now != inputMonitoring { inputMonitoring = now }
+    }
+
+    // Never answered: macOS's prompt; answered no: System Settings' Input Monitoring page (macOS
+    // asks only once, a refusal can only be changed there).
+    func askInputMonitoring() {
+        if Model.inputMonitoringNow() == .unknown {
+            _ = IOHIDRequestAccess(kIOHIDRequestTypeListenEvent)
+            for s in 1...60 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + .seconds(s)) { [weak self] in self?.refreshInputMonitoring() }
+            }
+        } else if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    // Once per version of the app (a new build may need the permission again; the agent itself
+    // never asks): the version asked with kept.
+    func askInputMonitoringAtFirstLaunch() {
+        let d = UserDefaults.standard
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?"
+        guard d.string(forKey: "askedInputMonitoringVersion") != version else { return }
+        d.set(version, forKey: "askedInputMonitoringVersion")
+        if Model.inputMonitoringNow() == .unknown { askInputMonitoring() }
     }
 
     // run.sh's "console-port: N"
@@ -747,7 +800,7 @@ final class Model: ObservableObject {
         }
         for port in up.subtracting(tabsUp).sorted() {
             log += "iKVM Viewer in a new tab (port \(port)).\n"
-            openConsole(port, tab: true, via: viewersViaVNC)
+            openConsole(port, via: viewersViaVNC)
         }
         if up != tabsUp { fetchViewerNames() }
         tabsUp = up
@@ -941,7 +994,7 @@ final class Model: ObservableObject {
     // other one (the VNC app then: TigerVNC Viewer).
     // via: this way, whatever is set (IPMIView's viewers: as its console was opened last).
     // IPMIView's console: how it was opened is remembered (ipmiviewViaVNC).
-    func openConsole(_ port: Int, tab: Bool = false, tips: Bool = false, alternate: Bool = false, via: Bool? = nil) {
+    func openConsole(_ port: Int, tips: Bool = false, alternate: Bool = false, via: Bool? = nil) {
         let target = vncTarget
         let viaVNC = via.map { $0 != alternate } ?? ((target != nil) != alternate)
         if port == Model.consolePort { ipmiviewViaVNC = viaVNC }
@@ -962,7 +1015,7 @@ final class Model: ObservableObject {
             }
             openInVNC(port, t)
         } else {
-            openBrowser(consoleURL(port, tab: tab), tips: tips)
+            openBrowser(consoleURL(port), tips: tips)
         }
     }
 
@@ -1453,6 +1506,9 @@ final class Model: ObservableObject {
         case (true, true):
             if !Model.stunnelInstalled { return (.minor, "Ready — but IPMIView's KVM console needs stunnel: brew install stunnel") }
             if !jnlpNative { return (.minor, "Ready — .jnlp files open in the container (no OpenWebStart)") }
+            if inputMonitoring != .granted {
+                return (.minor, "Ready — Allow Input Monitoring for Caps Lock passthrough.")
+            }
             return (.ok, Model.isAppleSilicon ? "Ready (native via Rosetta)" : "Ready (native)")
         }
     }
@@ -1465,9 +1521,6 @@ final class Model: ObservableObject {
     }
 
     static func shq(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-    static func osaEscape(_ s: String) -> String {
-        s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-    }
 }
 
 // MARK: - UI
@@ -1654,7 +1707,7 @@ struct MainView: View {
                                     .font(.caption).help(Model.addresses(port))
                                 Spacer()
                                 Button(optionHeld ? (m.viewersViaVNC ? "Open in Browser" : "Open in VNC app") : "Open console") {
-                                    m.openConsole(port, tab: true, alternate: NSEvent.modifierFlags.contains(.option), via: m.viewersViaVNC)
+                                    m.openConsole(port, alternate: NSEvent.modifierFlags.contains(.option), via: m.viewersViaVNC)
                                 }
                                 let stopping = m.stoppingViewers.contains(port)
                                 Button(role: .destructive) { m.stopViewer(port) } label: {
@@ -1740,8 +1793,16 @@ struct MainView: View {
         .fixedSize(horizontal: false, vertical: !logOpen)
         .onAppear {
             AppDelegate.model = m
-            m.handleLaunchArgs()
-            m.detectRunningContainers()
+            let pending = AppDelegate.pendingJnlp
+            AppDelegate.pendingJnlp = []
+            pending.forEach { m.launchJnlp($0) }
+            // once per app run: the window can be closed and opened again (the app keeps running)
+            if !AppDelegate.launched {
+                AppDelegate.launched = true
+                m.handleLaunchArgs()
+                m.detectRunningContainers()
+                m.askInputMonitoringAtFirstLaunch()
+            }
             m.watchDownloads()
             if flagsMonitor == nil {
                 flagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { e in
@@ -1749,6 +1810,10 @@ struct MainView: View {
                     return e
                 }
             }
+        }
+        .onDisappear {
+            if let f = flagsMonitor { NSEvent.removeMonitor(f) }
+            flagsMonitor = nil
         }
     }
 }
@@ -1897,6 +1962,23 @@ struct NativeSettings: View {
                     PathRow(label: "OpenWebStart", value: $m.javawsPath, pickDirectory: false,
                             onDetect: { m.detectJavaws(force: true) })
                     SettingNote(text: "To open .jnlp files natively; without it they open in the container.")
+                }
+            }
+            SettingsGroup {
+                SettingRow(label: "Input Monitoring",
+                           note: "For Caps Lock in the viewer (KeyPasta Preferences › Toggle keys › Passthrough): "
+                               + "the remote gets it down and up as you press and release it. Without it each "
+                               + "toggle arrives as a quick press. A new build of the app may need it again.") {
+                    switch m.inputMonitoring {
+                    case .granted: Text("Allowed").foregroundColor(.secondary)
+                    case .unknown: Button("Allow…") { m.askInputMonitoring() }
+                    case .denied: Button("Open System Settings…") { m.askInputMonitoring() }
+                    }
+                }
+                if m.inputMonitoring == .denied {
+                    Text("Listed there and switched on? That's for an earlier build of the app: remove it with −, "
+                         + "then click Allow… here again.")
+                        .font(.caption).foregroundColor(.orange).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -2065,6 +2147,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             NSApp.applicationIconImage = image
         }
     }
+    // The window's launch-time steps (launch arguments, running containers) ran.
+    static var launched = false
+
+    // Closing the window keeps the app running (a Window-scene app quits with its last window by
+    // default: with a viewer running, Cancel in the quit question below brought it back endlessly).
+    // The Dock icon or Window › iKVM-KeyPasta opens the window again.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if !flag { AppDelegate.openMainWindow?() }
+        return true
+    }
+
     // The viewers run as this app's children (their output comes through its pipes): quitting
     // ends them, and their remote sessions with them. Ask first while any is running.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -2084,9 +2179,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return alert.runModal() == .alertSecondButtonReturn ? .terminateNow : .terminateCancel
     }
 
+    // .jnlp files opened in the Finder (double-click, Open With). The app started that way gets
+    // them before its window exists (AppKit opens no window for a launch with files, and the window
+    // is what hands over the model): they wait in pendingJnlp, and the window is opened (or brought
+    // to the front), which takes them on appearing.
+    static var pendingJnlp: [String] = []
+    static var openMainWindow: (() -> Void)?
     func application(_ sender: NSApplication, open urls: [URL]) {
-        if let u = urls.first(where: { $0.pathExtension.lowercased() == "jnlp" }) {
-            AppDelegate.model?.launchJnlp(u.path)
+        let jnlps = urls.filter { $0.pathExtension.lowercased() == "jnlp" }.map(\.path)
+        guard !jnlps.isEmpty else { return }
+        if let m = AppDelegate.model { jnlps.forEach { m.launchJnlp($0) } } else { AppDelegate.pendingJnlp += jnlps }
+        // a window showing: only to the front (opening it again made it blink)
+        DispatchQueue.main.async {
+            if let w = NSApp.windows.first(where: { $0.isVisible && $0.canBecomeMain }) {
+                w.makeKeyAndOrderFront(nil)
+            } else {
+                AppDelegate.openMainWindow?()
+            }
+            NSApp.activate(ignoringOtherApps: true)
         }
     }
 }
@@ -2117,6 +2227,20 @@ enum AboutApp {
     }
 }
 
+// Window › iKVM-KeyPasta: the main window again after it was closed. Also hands SwiftUI's
+// openWindow to the app delegate (AppDelegate.openMainWindow), which has no view to take it
+// from: the menus are built at launch, also when no window is opened.
+struct MainWindowCommand: Commands {
+    @Environment(\.openWindow) private var openWindow
+    var body: some Commands {
+        let open = openWindow
+        let _ = AppDelegate.openMainWindow = { open(id: "main") }
+        CommandGroup(before: .windowList) {
+            Button("iKVM-KeyPasta") { open(id: "main") }
+        }
+    }
+}
+
 @main
 struct IPMIViewKeyPastaApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
@@ -2127,6 +2251,9 @@ struct IPMIViewKeyPastaApp: App {
             MainView(m: model)
         }
         .windowResizability(.contentSize)
+        // opened files go to the app delegate only: SwiftUI presented the window again for each
+        // (it blinked out and back)
+        .handlesExternalEvents(matching: [])
         // File › Open….jnlp (Cmd+O) in place of New Window
         .commands {
             CommandGroup(replacing: .newItem) {
@@ -2141,6 +2268,7 @@ struct IPMIViewKeyPastaApp: App {
             CommandGroup(replacing: .help) {
                 Button("iKVM-KeyPasta on GitHub") { NSWorkspace.shared.open(AboutApp.projectURL) }
             }
+            MainWindowCommand()
         }
         Settings {
             SettingsView(m: model)

@@ -60,9 +60,9 @@ final class Paste {
             || keyCode == KeyEvent.VK_ALT_GRAPH || keyCode == KeyEvent.VK_META || keyCode == KeyEvent.VK_WINDOWS;
     }
 
-    /** Every key event of the user to the viewer. True: consumed. */
     private int loggedNoHotkey;
 
+    /** Every key event of the user to the viewer. True: consumed. */
     boolean handle(KeyEvent e) {
         int id = e.getID();
         int keyCode = e.getKeyCode();

@@ -84,7 +84,7 @@ final class LocalLayouts {
                         add(current);
                         for (String name : layoutNames("AppleEnabledInputSources"))
                             add(macName(name));
-                    } else if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows")) {
+                    } else if (Config.WINDOWS) {
                         // Preload names the input languages; a language with another keyboard
                         // (English with Swiss German, say) has an ID there that Substitutes maps
                         // to the keyboard layout's KLID
@@ -242,21 +242,38 @@ final class LocalLayouts {
         return lines.isEmpty() ? null : lines.get(0).trim();
     }
 
-    /** A command's output lines; empty after 3 s or on failure. */
-    private static List<String> command(String... command) throws Exception {
-        List<String> lines = new ArrayList<String>();
-        Process p = new ProcessBuilder(command).redirectErrorStream(true).start();
-        BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), "UTF-8"));
-        try {
-            for (String line; (line = r.readLine()) != null; )
-                lines.add(line);
-        } finally {
-            r.close();
-        }
+    /**
+     * A command's output lines; empty on failure or after 3 s (also for a command that hangs with
+     * its output open: read by its own thread, so the wait's limit holds).
+     */
+    static List<String> command(String... command) throws Exception {
+        final List<String> lines = new ArrayList<String>();
+        final Process p = new ProcessBuilder(command).redirectErrorStream(true).start();
+        Thread reader = new Thread(new Runnable() {
+            public void run() {
+                try {
+                    BufferedReader r = new BufferedReader(new InputStreamReader(p.getInputStream(), "UTF-8"));
+                    try {
+                        for (String line; (line = r.readLine()) != null; )
+                            synchronized (lines) { lines.add(line); }
+                    } finally {
+                        r.close();
+                    }
+                } catch (Exception ignored) {
+                    // the process ended or was destroyed
+                }
+            }
+        }, "iKVM-KeyPasta command output");
+        reader.setDaemon(true);
+        reader.start();
         if (!p.waitFor(3, TimeUnit.SECONDS)) {
-            p.destroy();
+            p.destroyForcibly();
+            Log.d("command took over 3 s, stopped: " + command[0]);
             return new ArrayList<String>();
         }
-        return p.exitValue() == 0 ? lines : new ArrayList<String>();
+        reader.join(1000);                          // the rest of its output
+        synchronized (lines) {
+            return p.exitValue() == 0 ? new ArrayList<String>(lines) : new ArrayList<String>();
+        }
     }
 }

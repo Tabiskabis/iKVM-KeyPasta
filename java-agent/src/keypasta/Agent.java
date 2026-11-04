@@ -14,8 +14,8 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Java agent for the Supermicro/ATEN iKVM Java viewer, loaded into every Java program through
  * JAVA_TOOL_OPTIONS=-javaagent:...: does nothing until the viewer's key handling class
  * (tw.com.aten.ikvm.ui.RemoteVideo) is loaded, then installs KeyFix and patches that class (Patch).
- * macOS: IPMIView's Dock icon and font when IPMIView's main class loads (Icons, Fonts); the viewer's own stunnel
- * from a fixed place (Spawn).
+ * IPMIView: its fixes when its main class loads (Widen, Fonts, IPMIViewLogin, SettingsFolder and
+ * others; macOS: Dock icon, Icons). macOS: the viewer's own stunnel from a fixed place (Spawn).
  *
  * Java Web Start (.jnlp from the BMC's web interface: OpenWebStart, IcedTea-Web, Oracle javaws)
  * runs the viewer under a security manager, which gives code from the class path no permissions
@@ -170,9 +170,8 @@ public final class Agent {
                             out = mouse;
                     }
                     {
-                        // macOS: its LED code quits the viewer without a permission; Linux: its
-                        // LED sync types lock keys locally, which reached the remote; Windows and
-                        // Linux: Simplify Caps Lock (see Native)
+                        // the Caps Lock setting (see Native; macOS: its LED code quits the
+                        // viewer without a permission)
                         byte[] redirected = Patch.redirectNatives(out != null ? out : bytes);
                         if (redirected != null)
                             out = redirected;
@@ -223,7 +222,8 @@ public final class Agent {
         Thread t = new Thread(new Runnable() {
             @Override
             public void run() {
-                openKeyEvent(instrumentation);
+                // the key position is in private fields of KeyEvent (scancode on Windows, rawCode on Linux)
+                openDesktop("java.awt.event");
                 EventQueue.invokeLater(new Runnable() {
                     @Override
                     public void run() {
@@ -240,124 +240,66 @@ public final class Agent {
         t.setDaemon(true);
         t.start();
     }
-
-    /**
-     * Java 9+: a package of java.desktop exported to this agent, e.g. com.apple.laf for FlatTabs.
-     * Java 8: nothing to do (true).
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    static boolean exportDesktop(String pkg) {
-        try {
-            Method getModule = Class.class.getMethod("getModule");
-            Object desktop = getModule.invoke(java.awt.Component.class);
-            Object self = getModule.invoke(Agent.class);
-            Class<?> moduleClass = Class.forName("java.lang.Module");
-            Method redefine = Instrumentation.class.getMethod("redefineModule", moduleClass, Set.class,
-                Map.class, Map.class, Set.class, Map.class);
-            Map exports = Collections.singletonMap(pkg, Collections.singleton(self));
-            redefine.invoke(instrumentation, desktop, Collections.emptySet(), exports, Collections.emptyMap(),
-                Collections.emptySet(), Collections.emptyMap());
-            return true;
-        } catch (NoSuchMethodException e) {
-            return true;                                   // Java 8
-        } catch (Exception e) {
-            Log.d("exporting " + pkg + " failed: " + e);
-            return false;
-        }
-    }
-
-    /**
-     * Java 9+: the key position lives in private fields of java.awt.event.KeyEvent (scancode on
-     * Windows, rawCode on Linux), so open that package to this agent. Java 8 needs nothing.
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    /**
-     * macOS, before AWT loads: java.desktop reads the agent's module (its patched classes call
-     * MacKeys) and opens sun.lwawt.macosx to it (MacKeys calls NSEvent's natives). Java 8: no
-     * modules, nothing to do.
-     */
     /** IPMIView's classes that look up the own address for every connection or packet but don't need it (see LocalHost). */
     private static final java.util.Set<String> LOCAL_HOST_USERS = new java.util.HashSet<String>(java.util.Arrays.asList(
         "IPMIView20/UDPSocket", "IPMIView20/SOLUDPSocket20", "IPMIView20/UOLUDPHandler", "com/supermicro/ipmi/UDPSocket"));
 
-    private static boolean openDesktopForMacKeys(Instrumentation inst) {
+    /**
+     * Java 9+: the module `member` is in (java.desktop, java.base) redefined for this agent: it
+     * reads the agent's module (`reads`), the packages `exports` exported and `opens` opened to it
+     * (private members by reflection). Java 8: no modules, nothing to do (true). Failed: logged.
+     */
+    private static boolean redefineModule(Instrumentation inst, Class<?> member, boolean reads, String[] exports,
+                                          String[] opens) {
         try {
             Method getModule = Class.class.getMethod("getModule");
-            Object desktop = getModule.invoke(java.awt.Component.class);
-            Object self = getModule.invoke(Agent.class);
-            Class<?> moduleClass = Class.forName("java.lang.Module");
-            Method redefine = Instrumentation.class.getMethod("redefineModule", moduleClass, Set.class,
-                Map.class, Map.class, Set.class, Map.class);
-            Map<String, Set<Object>> opens = new java.util.HashMap<String, Set<Object>>();
-            opens.put("sun.lwawt.macosx", Collections.singleton(self));
-            opens.put("java.awt.event", Collections.singleton(self));   // MacKeys sets KeyEvent's fields
-            opens.put("java.awt", Collections.singleton(self));         // ViewerWatch: Window.modalBlocker, peer
-            opens.put("java.awt.peer", Collections.singleton(self));    // ViewerWatch: WindowPeer.setModalBlocked
-            opens.put("sun.lwawt", Collections.singleton(self));        // ViewerWatch: LWWindowPeer's state
-            redefine.invoke(inst, desktop, Collections.singleton(self), Collections.emptyMap(), opens,
+            Object module = getModule.invoke(member);
+            Set<Object> self = Collections.singleton(getModule.invoke(Agent.class));
+            Map<String, Set<Object>> exported = new java.util.HashMap<String, Set<Object>>();
+            for (String pkg : exports)
+                exported.put(pkg, self);
+            Map<String, Set<Object>> opened = new java.util.HashMap<String, Set<Object>>();
+            for (String pkg : opens)
+                opened.put(pkg, self);
+            Method redefine = Instrumentation.class.getMethod("redefineModule", Class.forName("java.lang.Module"),
+                Set.class, Map.class, Map.class, Set.class, Map.class);
+            redefine.invoke(inst, module, reads ? self : Collections.emptySet(), exported, opened,
                 Collections.emptySet(), Collections.emptyMap());
             return true;
         } catch (NoSuchMethodException e) {
             return true;                                   // Java 8
         } catch (Exception e) {
-            Log.d("macOS physical keys: module access failed: " + e);
+            Log.d("module access failed (exports " + java.util.Arrays.toString(exports) + ", opens "
+                + java.util.Arrays.toString(opens) + "): " + e);
             return false;
         }
     }
 
-    /** Java 9+: a package of java.desktop opened to this agent (private members by reflection). */
+    private static final String[] NONE = new String[0];
+
+    /** A package of java.desktop exported to this agent, e.g. com.apple.laf for FlatTabs. */
+    static boolean exportDesktop(String pkg) {
+        return redefineModule(instrumentation, java.awt.Component.class, false, new String[] {pkg}, NONE);
+    }
+
+    /**
+     * macOS, before AWT loads: java.desktop reads the agent's module (its patched classes call
+     * MacKeys) and opens sun.lwawt.macosx to it (MacKeys calls NSEvent's natives), java.awt.event
+     * (MacKeys sets KeyEvent's fields), java.awt, java.awt.peer and sun.lwawt (ViewerWatch: the
+     * windows' modal blockers and LWWindowPeer's state).
+     */
+    private static boolean openDesktopForMacKeys(Instrumentation inst) {
+        return redefineModule(inst, java.awt.Component.class, true, NONE,
+            new String[] {"sun.lwawt.macosx", "java.awt.event", "java.awt", "java.awt.peer", "sun.lwawt"});
+    }
+
+    /** A package of java.desktop opened to this agent (private members by reflection). */
     static void openDesktop(String pkg) {
-        try {
-            Method getModule = Class.class.getMethod("getModule");
-            Object desktop = getModule.invoke(java.awt.Component.class);
-            Object self = getModule.invoke(Agent.class);
-            Class<?> moduleClass = Class.forName("java.lang.Module");
-            Method redefine = Instrumentation.class.getMethod("redefineModule", moduleClass, Set.class,
-                Map.class, Map.class, Set.class, Map.class);
-            Map opens = Collections.singletonMap(pkg, Collections.singleton(self));
-            redefine.invoke(instrumentation, desktop, Collections.emptySet(), Collections.emptyMap(), opens,
-                Collections.emptySet(), Collections.emptyMap());
-        } catch (NoSuchMethodException e) {
-            // Java 8
-        } catch (Exception e) {
-            Log.d("opening " + pkg + " failed: " + e);
-        }
+        redefineModule(instrumentation, java.awt.Component.class, false, NONE, new String[] {pkg});
     }
 
-    /** Java 9+: a package of java.base opened to this agent (private members by reflection). */
+    /** A package of java.base opened to this agent (private members by reflection). */
     static void openBase(String pkg) {
-        try {
-            Method getModule = Class.class.getMethod("getModule");
-            Object base = getModule.invoke(Object.class);
-            Object self = getModule.invoke(Agent.class);
-            Class<?> moduleClass = Class.forName("java.lang.Module");
-            Method redefine = Instrumentation.class.getMethod("redefineModule", moduleClass, Set.class,
-                Map.class, Map.class, Set.class, Map.class);
-            Map<String, Set<Object>> opens = Collections.singletonMap(pkg, Collections.singleton(self));
-            redefine.invoke(instrumentation, base, Collections.emptySet(), Collections.emptyMap(), opens,
-                Collections.emptySet(), Collections.emptyMap());
-        } catch (NoSuchMethodException e) {
-            // Java 8
-        } catch (Exception e) {
-            Log.d("opening " + pkg + " failed: " + e);
-        }
-    }
-
-    private static void openKeyEvent(Instrumentation inst) {
-        try {
-            Method getModule = Class.class.getMethod("getModule");
-            Object desktop = getModule.invoke(java.awt.event.KeyEvent.class);
-            Object self = getModule.invoke(Agent.class);
-            Class<?> moduleClass = Class.forName("java.lang.Module");
-            Method redefine = Instrumentation.class.getMethod("redefineModule", moduleClass, Set.class,
-                Map.class, Map.class, Set.class, Map.class);
-            Map opens = Collections.singletonMap("java.awt.event", Collections.singleton(self));
-            redefine.invoke(inst, desktop, Collections.emptySet(), Collections.emptyMap(), opens,
-                Collections.emptySet(), Collections.emptyMap());
-        } catch (NoSuchMethodException e) {
-            // Java 8
-        } catch (Exception e) {
-            Log.d("opening java.awt.event failed: " + e);
-        }
+        redefineModule(instrumentation, Object.class, false, NONE, new String[] {pkg});
     }
 }

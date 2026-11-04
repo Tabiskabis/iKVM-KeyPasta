@@ -17,9 +17,7 @@ import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.lang.reflect.Field;
 import java.util.Collections;
-import java.util.Locale;
 import java.util.Map;
-import java.util.WeakHashMap;
 import javax.swing.Timer;
 
 /**
@@ -32,9 +30,9 @@ import javax.swing.Timer;
  * - iKVM's "stable" keyboard mode drops a held left Ctrl when the next key goes down, but a key
  *   release sends it: left Ctrl is followed by the release of F24 (never pressed; no effect on
  *   Linux and Windows remotes).
- * - Lock keys (CapsLock, ...) go to iKVM unchanged (see Native for "Simplify Caps Lock").
- * - CapsLock follows the window like on a KVM switch: each viewer window keeps the remote's
- *   state, other programs keep theirs (see windowFocus).
+ * - Toggle keys (CapsLock, NumLock, ScrollLock): by the Toggle keys setting. Unaltered: to the
+ *   viewer unchanged; Toggle both sides and Passthrough: taken here and sent through Native
+ *   (bothKey, physicalKey).
  * - Paste (see Paste).
  * The viewer window's title gets " ⌨", so iKVM-KeyPasta.ahk leaves it alone.
  */
@@ -64,14 +62,6 @@ final class KeyFix implements KeyEventDispatcher {
     private boolean ctrlDropped;
     private final Timer ctrlTimer;
     private Component inputMethodsOff;
-    /** CapsLock of each viewer window when last left: the remote's (see windowFocus). */
-    private final Map<Window, Boolean> viewerCaps = new WeakHashMap<Window, Boolean>();
-    /** CapsLock of the other programs, set again when a viewer window is left for them. */
-    private Boolean outsideCaps;
-    /** When this class last set CapsLock locally: Windows then sends a CapsLock key. */
-    private long capsSetAt;
-    private static final int CAPS_SYNC_DELAY_MS = 150;
-    private static final int CAPS_KEY_WINDOW_MS = 300;
     /** Keys sent as pressed (after the position fix): key code * 10 + key location, see dispatch. */
     private final java.util.Set<Integer> pressed = new java.util.LinkedHashSet<Integer>();
     private Component viewer;
@@ -81,6 +71,13 @@ final class KeyFix implements KeyEventDispatcher {
     static void install(Config config) {
         final KeyFix fix = new KeyFix(config);
         KeyboardFocusManager.getCurrentKeyboardFocusManager().addKeyEventDispatcher(fix);
+        // the keyboard opened as the viewer loads: a viewer window's activation may come before
+        // the viewer is in it (the .jnlp viewer), and opened at the first Caps Lock in the viewer
+        // that press was too early to be read from it (sent as a press and a release). Whatever
+        // the mode: a BMC's own setting applies only from its first key on (Config.useBmc), and
+        // the reports are used only while Passthrough is (capsKey)
+        if (fix.os == Os.MAC)
+            MacCapsKey.start(fix);
         Toolkit.getDefaultToolkit().addAWTEventListener(new AWTEventListener() {
             @Override
             public void eventDispatched(AWTEvent event) {
@@ -101,8 +98,6 @@ final class KeyFix implements KeyEventDispatcher {
                     // keys released in another window never come back here
                     if (event.getID() == WindowEvent.WINDOW_DEACTIVATED)
                         fix.reset();
-                    if (event.getID() == WindowEvent.WINDOW_ACTIVATED || event.getID() == WindowEvent.WINDOW_DEACTIVATED)
-                        fix.windowFocus((WindowEvent) event);
                 } catch (RuntimeException e) {      // not into the window's own event handling
                     Log.d("window event failed: " + e);
                 }
@@ -114,7 +109,7 @@ final class KeyFix implements KeyEventDispatcher {
                 Icons.viewerWindow(frame);
             Menu.addTo(frame, fix);
         }
-        ViewerWatch.install(fix.os == Os.MAC);
+        ViewerWatch.install(fix.os == Os.MAC, fix.os == Os.WINDOWS);
         WaylandFrames.install();
         Log.d("installed: os=" + fix.os + " scancode=" + (fix.scancodeField != null)
             + " rawCode=" + (fix.rawCodeField != null) + " macPositions=" + fix.macPositions.size()
@@ -197,9 +192,7 @@ final class KeyFix implements KeyEventDispatcher {
         ViewerLayout.config = config;
         config.resolvePaste();
         config.loadPrefs();
-        String name = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        os = name.startsWith("windows") ? Os.WINDOWS : name.startsWith("linux") ? Os.LINUX
-            : name.startsWith("mac") ? Os.MAC : Os.OTHER;
+        os = Config.WINDOWS ? Os.WINDOWS : Config.LINUX ? Os.LINUX : Config.MAC ? Os.MAC : Os.OTHER;
         if (os == Os.WINDOWS) {
             scancodeField = field("scancode");
             windowsKeyField = field("rawCode");
@@ -355,6 +348,30 @@ final class KeyFix implements KeyEventDispatcher {
             return paste.busy();
         if (paste.handle(e))
             return true;
+        int lock = toggleKey(e.getKeyCode());
+        if (lock != 0 && (Native.passthrough() || Native.both()) && Native.keyboardOn(c)) {
+            // Toggle keys Passthrough: down and up as the physical key goes (the viewer's stable
+            // keyboard mode would send a quick press only at its release). Toggle both sides: the
+            // remote's lock follows the local one's new state (see Native.bothKey).
+            boolean press = e.getID() == KeyEvent.KEY_PRESSED;
+            if (press && pendingCtrl != null)
+                sendPendingCtrl();                  // a left Ctrl held back (AltGr check) goes first, as before any key
+            if (Native.passthrough()) {
+                if (os == Os.MAC && lock == 57) {
+                    // macOS reports the lock changing, not the key: the key from the keyboard
+                    // itself where allowed (capsKey), else one whole key per event
+                    if (!MacCapsKey.active)
+                        Native.wholeKey(c, 57);
+                    else
+                        MacCapsKey.javaEvent(c);    // no keyboard reported it: as a whole key
+                } else
+                    Native.physicalKey(c, lock, press);
+            } else if (os == Os.MAC ? press || lock == 57 : !press)
+                // decided once the local lock has its new state: at the release (macOS: each
+                // Caps Lock event is a change, press = on, release = off; Clear at its press)
+                Native.bothKey(c, lock, os == Os.MAC ? (lock == 57 ? Boolean.valueOf(press) : null) : localLock(e.getKeyCode()));
+            return true;
+        }
         if (!config.enableKeyFix) {
             // keyboard fixes off: the viewer sees the key unchanged, input methods as Java set them
             if (inputMethodsOff != null) {
@@ -370,12 +387,6 @@ final class KeyFix implements KeyEventDispatcher {
             // ended right away instead (see endMacComposition).
             c.enableInputMethods(false);
             inputMethodsOff = c;
-        }
-        if (isCapsSyncKey(e))
-            return true;
-        if (os == Os.LINUX && Native.isSyncKey(e)) {
-            Log.d("LED sync key dropped: " + (e.getID() == KeyEvent.KEY_PRESSED ? "press" : "release"));
-            return true;
         }
         if (handleCtrl(e))
             return true;
@@ -439,6 +450,49 @@ final class KeyFix implements KeyEventDispatcher {
     private static boolean isLockKey(int k) {
         return k == KeyEvent.VK_CAPS_LOCK || k == KeyEvent.VK_NUM_LOCK || k == KeyEvent.VK_SCROLL_LOCK;
     }
+
+    /** A toggle key's USB code (57 Caps Lock, 83 Num Lock, 71 Scroll Lock; macOS' Clear: Num Lock), else 0. */
+    private int toggleKey(int k) {
+        return k == KeyEvent.VK_CAPS_LOCK ? 57 : k == KeyEvent.VK_NUM_LOCK || (os == Os.MAC && k == KeyEvent.VK_CLEAR) ? 83
+            : k == KeyEvent.VK_SCROLL_LOCK ? 71 : 0;
+    }
+
+    /** The local lock's state as Java has it, null if it can't tell. */
+    private static Boolean localLock(int k) {
+        try {
+            return Toolkit.getDefaultToolkit().getLockingKeyState(k);
+        } catch (RuntimeException e) {          // UnsupportedOperationException: not on this system
+            return null;
+        }
+    }
+
+    /**
+     * macOS, Passthrough: the Caps Lock key went down or up (MacCapsKey, from the keyboard itself,
+     * whatever program is in front): to the viewer if it has the focus. Read in every mode, used
+     * only in Passthrough.
+     */
+    void capsKey(boolean down) {
+        if (!Native.passthrough())
+            return;
+        Component c = KeyboardFocusManager.getCurrentKeyboardFocusManager().getFocusOwner();
+        if (c != null && !isViewer(c)) {
+            // the focus on another part of a viewer window (toolbar, button): its keys go to the
+            // viewer (retarget), so does this one
+            Window w = c instanceof Window ? (Window) c : javax.swing.SwingUtilities.getWindowAncestor(c);
+            Component v = viewer;
+            c = v != null && w != null && isViewer(v) && javax.swing.SwingUtilities.getWindowAncestor(v) == w ? v : null;
+        }
+        String why = c == null ? "no viewer has the focus" : !Native.keyboardOn(c) ? "the viewer's keyboard is off" : null;
+        if (why != null) {
+            if (capsDropped++ < 5)
+                Log.d("Caps Lock from the keyboard not sent: " + why);
+            return;
+        }
+        viewer = c;
+        Native.physicalKey(c, 57, down);
+    }
+
+    private int capsDropped;
 
     private static boolean isDeadKey(int k) {
         return k >= KeyEvent.VK_DEAD_GRAVE && k <= KeyEvent.VK_DEAD_SEMIVOICED_SOUND;
@@ -586,11 +640,38 @@ final class KeyFix implements KeyEventDispatcher {
         if (os == Os.MAC && keyCode == KeyEvent.VK_META)
             return KeyEvent.VK_WINDOWS;     // Command: the remote's Windows key (iKVM leaves Meta out)
         int location = e.getKeyLocation();
+        if (location == KeyEvent.KEY_LOCATION_NUMPAD)
+            return keypadKey(keyCode);
         if (location != KeyEvent.KEY_LOCATION_STANDARD && location != KeyEvent.KEY_LOCATION_UNKNOWN)
-            return keyCode;         // numpad, left/right modifiers: same position on every layout
+            return keyCode;         // left/right modifiers: same position on every layout
         int position = position(e);
         Integer us = Layouts.US_KEY.get(position);
         return us == null ? keyCode : us;
+    }
+
+    /**
+     * A keypad key as the keypad key itself, whatever the local NumLock: with it off, Windows and
+     * X report keypad 1 as End, 5 as Clear/Begin and so on, which iKVM sends as the navigation
+     * keys (KeyMap.VKtoHID: End is USB 77, keypad 1 is 89; Clear and Begin are nothing), so the
+     * remote's keypad followed the local NumLock instead of its own. As from a keyboard plugged
+     * into the server, the remote's NumLock decides what the key does. The keypad's Enter stays
+     * Enter (iKVM has no code for the keypad's own).
+     */
+    static int keypadKey(int keyCode) {
+        switch (keyCode) {
+            case KeyEvent.VK_INSERT: return KeyEvent.VK_NUMPAD0;
+            case KeyEvent.VK_END: return KeyEvent.VK_NUMPAD1;
+            case KeyEvent.VK_DOWN: case KeyEvent.VK_KP_DOWN: return KeyEvent.VK_NUMPAD2;
+            case KeyEvent.VK_PAGE_DOWN: return KeyEvent.VK_NUMPAD3;
+            case KeyEvent.VK_LEFT: case KeyEvent.VK_KP_LEFT: return KeyEvent.VK_NUMPAD4;
+            case KeyEvent.VK_CLEAR: case KeyEvent.VK_BEGIN: return KeyEvent.VK_NUMPAD5;
+            case KeyEvent.VK_RIGHT: case KeyEvent.VK_KP_RIGHT: return KeyEvent.VK_NUMPAD6;
+            case KeyEvent.VK_HOME: return KeyEvent.VK_NUMPAD7;
+            case KeyEvent.VK_UP: case KeyEvent.VK_KP_UP: return KeyEvent.VK_NUMPAD8;
+            case KeyEvent.VK_PAGE_UP: return KeyEvent.VK_NUMPAD9;
+            case KeyEvent.VK_DELETE: return KeyEvent.VK_DECIMAL;
+            default: return keyCode;
+        }
     }
 
     private int position(KeyEvent e) {
@@ -636,57 +717,6 @@ final class KeyFix implements KeyEventDispatcher {
         return p == null ? -1 : p;
     }
 
-    /**
-     * CapsLock follows the active window, like on a KVM switch: leaving a viewer window for another
-     * program, the viewer's state (the remote's) is kept and the other programs' state set again;
-     * coming back, the viewer's. iKVM tries the same in its native code (Viewer.focusGained /
-     * focusLost), which didn't work: the local and the remote CapsLock went apart. A target state,
-     * set only when it differs, and a bit later than iKVM's own attempt: if that worked, nothing
-     * happens. Moving between a viewer window and its own dialogs changes nothing. Where Java can't
-     * set the lock state (macOS, Linux), it does nothing.
-     */
-    void windowFocus(WindowEvent e) {
-        if (!config.enableKeyFix || os != Os.WINDOWS || config.simpleCaps)
-            return;                                 // only Windows' Java can set the lock state; Simplify Caps Lock: no syncing
-        final Window viewerWindow = viewerOf(e.getWindow());
-        if (viewerWindow == null)
-            return;
-        Window other = viewerOf(e.getOppositeWindow());
-        if (other == viewerWindow)
-            return;                                 // to or from its own dialog
-        boolean outside = other == null;            // another program (or its window gone)
-        Boolean local = capsLock();
-        if (local == null)
-            return;
-        if (e.getID() == WindowEvent.WINDOW_DEACTIVATED) {
-            viewerCaps.put(viewerWindow, local);
-            if (outside && outsideCaps != null && !outsideCaps.equals(local))
-                setCapsLock(outsideCaps, "left the viewer");
-            return;
-        }
-        if (outside)
-            outsideCaps = local;
-        if (!viewerCaps.containsKey(viewerWindow)) {
-            viewerCaps.put(viewerWindow, local);    // first time: as iKVM left it on connecting
-            return;
-        }
-        Timer later = new Timer(CAPS_SYNC_DELAY_MS, new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent ev) {
-                try {
-                    Boolean want = viewerCaps.get(viewerWindow);
-                    Boolean now = capsLock();
-                    if (want != null && now != null && !want.equals(now) && viewerWindow.isActive())
-                        setCapsLock(want, "back in the viewer");
-                } catch (RuntimeException ex) {
-                    Log.d("CapsLock sync failed: " + ex);
-                }
-            }
-        });
-        later.setRepeats(false);
-        later.start();
-    }
-
     /** The viewer window w is, or whose dialog it is; null for any other window and for null. */
     private static Window viewerOf(Window w) {
         for (; w != null; w = w.getOwner())
@@ -703,45 +733,6 @@ final class KeyFix implements KeyEventDispatcher {
                 if (containsViewer(child))
                     return true;
         return false;
-    }
-
-    private static Boolean capsLock() {
-        try {
-            return Toolkit.getDefaultToolkit().getLockingKeyState(KeyEvent.VK_CAPS_LOCK);
-        } catch (RuntimeException e) {          // UnsupportedOperationException on some systems
-            return null;
-        }
-    }
-
-    private void setCapsLock(boolean on, String why) {
-        try {
-            capsSetAt = System.currentTimeMillis();
-            Toolkit.getDefaultToolkit().setLockingKeyState(KeyEvent.VK_CAPS_LOCK, on);
-            Log.d("CapsLock set " + (on ? "on" : "off") + ": " + why);
-        } catch (RuntimeException e) {          // macOS, Linux: can't be set from Java
-            Log.d("CapsLock can't be set here: " + e);
-        }
-    }
-
-    /**
-     * The CapsLock key Windows sends when the lock state is set (by setCapsLock, or iKVM's own LED
-     * sync): no key press, so not for the remote, where it would toggle CapsLock again. It has no
-     * scan code; right after setCapsLock any CapsLock key counts, should a system give it one.
-     */
-    private boolean isCapsSyncKey(KeyEvent e) {
-        if (os != Os.WINDOWS || e.getKeyCode() != KeyEvent.VK_CAPS_LOCK)
-            return false;
-        long scan = -1;
-        try {
-            if (scancodeField != null)
-                scan = scancodeField.getLong(e);
-        } catch (IllegalAccessException ignored) {
-        }
-        if (scan != 0 && System.currentTimeMillis() - capsSetAt > CAPS_KEY_WINDOW_MS)
-            return false;
-        Log.d("CapsLock sync key dropped: " + (e.getID() == KeyEvent.KEY_PRESSED ? "press" : "release")
-            + " scan=" + scan);
-        return true;
     }
 
     /**
@@ -805,6 +796,8 @@ final class KeyFix implements KeyEventDispatcher {
         ctrlTimer.stop();
         pendingCtrl = null;
         try {
+            if (viewer != null)
+                Native.releasePhysical(viewer);
             if (viewer != null && (ctrlSent || !pressed.isEmpty())) {
                 long now = System.currentTimeMillis();
                 boolean altOrWin = false;

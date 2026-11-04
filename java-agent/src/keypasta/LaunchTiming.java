@@ -46,6 +46,27 @@ public final class LaunchTiming {
         return System.getProperty("os.name") + ":" + System.getProperty("os.arch");
     }
 
+    /**
+     * iKVMLunchar's ConfigAccessor.getProperty (stunnel.properties in the folder IPMIView runs in).
+     * launchKVM reads vm_security, sets it to "off" when missing, reads it again and calls
+     * equalsIgnoreCase on it; without the file setProperty writes nothing (it reads the file
+     * first and gives up), the second read is null, and the NullPointerException ends the launch
+     * without a message. A missing vm_security is answered with "off", what IPMIView means to save.
+     */
+    public static String getProperty(Object config, String key) throws Exception {
+        Object value;
+        try {
+            value = config.getClass().getMethod("getProperty", String.class).invoke(config, key);
+        } catch (java.lang.reflect.InvocationTargetException e) {
+            throw e.getCause() instanceof Exception ? (Exception) e.getCause() : e;
+        }
+        if (value == null && "vm_security".equals(key)) {
+            Log.d("KVM launch: no vm_security in stunnel.properties (missing file?): taken as off");
+            return "off";
+        }
+        return (String) value;
+    }
+
     /** StunnelUtility's StunnelParameters.setStunnelIP: the local address stunnel listens on. */
     public static void setStunnelIP(Object parameters, String ip) throws Exception {
         listenIp = ip;

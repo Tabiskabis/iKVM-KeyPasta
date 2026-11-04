@@ -8,9 +8,7 @@ import java.beans.PropertyChangeEvent;
 import java.beans.PropertyChangeListener;
 import java.lang.reflect.Field;
 import javax.swing.ButtonGroup;
-import javax.swing.Box;
 import javax.swing.BoxLayout;
-import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
 import javax.swing.JLabel;
@@ -18,7 +16,6 @@ import javax.swing.JMenu;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
-import javax.swing.JRadioButton;
 import javax.swing.JPopupMenu;
 import javax.swing.SwingUtilities;
 import javax.swing.event.PopupMenuEvent;
@@ -178,15 +175,20 @@ final class Menu {
 
     /**
      * A row of the dialog: a setting, its label and hint, and a dropdown of its values (how
-     * they're shown: names), or for the hotkey a field that records it from a key press.
+     * they're shown: names), or for the hotkey a field that records it from a key press; each with
+     * a reset button: for the current host back to the default's value, for the defaults back to
+     * the setting's own default.
      */
     private static final class Row {
         final String key, label, hint;
         final String[] values, names;
         final JComboBox<String> box;        // null: the hotkey
         final HotkeyField hot;              // the hotkey's, else null
+        final javax.swing.JButton reset = new javax.swing.JButton("↺");
         final JComponent comp;              // box or hot
-        final JLabel status = new JLabel(" ");
+        final JComponent cell;              // what the dialog places: comp with reset
+        /** What each value does, as hover text on its entry and on the dropdown; null: none. */
+        String[] tips;
 
         Row(String key, String label, String hint, String[] values, String[] names) {
             this.key = key;
@@ -197,6 +199,21 @@ final class Menu {
             this.box = new JComboBox<String>(names);
             this.hot = null;
             this.comp = box;
+            this.cell = withReset(box);
+            final javax.swing.ListCellRenderer<? super String> plain = box.getRenderer();
+            box.setRenderer(new javax.swing.ListCellRenderer<String>() {
+                @Override
+                public java.awt.Component getListCellRendererComponent(javax.swing.JList<? extends String> list,
+                        String value, int index, boolean selected, boolean focused) {
+                    java.awt.Component c = plain.getListCellRendererComponent(list, value, index, selected, focused);
+                    if (c instanceof JComponent && index >= 0) {
+                        javax.swing.ToolTipManager.sharedInstance().registerComponent(list);
+                        ((JComponent) c).setToolTipText(tip(index));
+                    }
+                    return c;
+                }
+            });
+            box.addItemListener(e -> box.setToolTipText(tip(box.getSelectedIndex())));
         }
 
         /** The hotkey's row. */
@@ -208,6 +225,21 @@ final class Menu {
             this.box = null;
             this.hot = new HotkeyField();
             this.comp = hot;
+            this.cell = withReset(hot);
+        }
+
+        private JComponent withReset(JComponent c) {
+            reset.setMargin(new java.awt.Insets(0, 4, 0, 4));
+            reset.setFocusable(false);
+            JPanel p = new JPanel(new java.awt.BorderLayout(4, 0));
+            p.add(c, java.awt.BorderLayout.CENTER);
+            p.add(reset, java.awt.BorderLayout.EAST);
+            return p;
+        }
+
+        /** The hover text of the dropdown's entry i. */
+        String tip(int i) {
+            return tips == null || i < 0 ? null : tips[i];
         }
 
         int index(String v) {
@@ -216,10 +248,12 @@ final class Menu {
         }
 
         void show(String v) {
-            if (hot != null)
+            if (hot != null) {
                 hot.show(v);
-            else
-                box.setSelectedIndex(index(v));
+                return;
+            }
+            box.setSelectedIndex(index(v));
+            box.setToolTipText(tip(box.getSelectedIndex()));
         }
 
         String value() {
@@ -285,7 +319,11 @@ final class Menu {
         void show(String v) {
             spec = v == null ? "" : v;
             if (!recording)
-                setText(label(spec));
+                setText(text());
+        }
+
+        private String text() {
+            return label(spec);
         }
 
         private void start() {
@@ -302,7 +340,7 @@ final class Menu {
                 return;
             recording = false;
             setFocusTraversalKeysEnabled(true);
-            setText(label(spec));
+            setText(text());
         }
 
         private void pressed(KeyEvent e) {
@@ -359,8 +397,9 @@ final class Menu {
     /**
      * KeyPasta Preferences: every setting with a default and, for the current host (the BMC in
      * the viewer's title), a value of its own or the default's. A switch shows one level at a
-     * time: the current host's (values taken from the default in grey italics, "From default:
-     * ...", changed ones its own, "Own value") or the defaults. "Hosts with own settings..."
+     * time: the current host's (values taken from the default in grey italics, its own in blue;
+     * each row's reset button takes its own value away) or the defaults (reset: the setting's own
+     * default). Hover texts stay while the pointer is there. "Hosts with own settings..."
      * lists all hosts that have any, each to reset. Saved on OK (see Config).
      */
     private static void showDialog(Window parent, final KeyFix fix) {
@@ -381,9 +420,19 @@ final class Menu {
         rows.add(new Row(Config.KEY_FIX, "Keyboard fixes", "Key positions, Ctrl, dead keys", onOff, onOffNames));
         rows.add(new Row(Config.SWAP, "Swap Alt and GUI keys", "GUI is Cmd on Mac and Win on PC keyboards",
             new String[] {"false", "true"}, new String[] {"Not swapped", "Swapped"}));
-        if (!Config.MAC)                            // macOS: always simplified
-            rows.add(new Row(Config.SIMPLE_CAPS, "Caps Lock", "Simplified: a toggle per press, no LED syncing",
-                new String[] {"false", "true"}, new String[] {"With LED syncing", "Simplified"}));
+        rows.add(new Row(Config.TOGGLE, "Toggle keys", "Caps Lock, Num Lock, Scroll Lock",
+            new String[] {"unaltered", "both", "passthrough"},
+            new String[] {"Unaltered behavior", "Toggle both sides", "Passthrough"}));
+        rows.get(rows.size() - 1).tips = new String[] {
+            "<html>The viewer's own handling. Your lights and the remote's easily get out of step."
+                + (Config.MAC ? "<br>On a Mac KeyPasta only keeps the viewer from quitting without Input Monitoring." : "")
+                + "</html>",
+            "<html>A press toggles your lock and the remote’s. If they differ, it brings the remote in step<br>"
+                + "with yours."
+                + (Config.MAC ? "<br>The Clear key is always sent: a Mac has no Num Lock." : "") + "</html>",
+            "<html>The key exactly as you press it, down, holding, and up, like any other key. Each side keeps<br>"
+                + "its own state: they can get stuck and the lights easily get out of step."
+                + (Config.MAC ? "<br>Needs macOS input monitoring permissions." : "") + "</html>"};
         rows.add(new Row(Config.PASTE, "Paste", "Types the clipboard on the remote", onOff, onOffNames));
         rows.add(new Row(Config.HOTKEY, "Paste hotkey", "Click it, then press the keys"));
         rows.add(new Row(Config.LAYOUT, "Remote keyboard layout", "Required for faster paste operation", layoutValues, layoutNames));
@@ -404,15 +453,15 @@ final class Menu {
                 filling[0] = true;
                 for (Row r : all) {
                     boolean isOwn = hostScope[0] && own.containsKey(r.key);
-                    String v = isOwn ? own.get(r.key) : def.get(r.key);
-                    r.show(v);
+                    r.show(isOwn ? own.get(r.key) : def.get(r.key));
                     java.awt.Font f = r.comp.getFont();
                     boolean inherited = hostScope[0] && !isOwn;
                     r.comp.setFont(f.deriveFont(inherited ? java.awt.Font.ITALIC : java.awt.Font.PLAIN));
                     r.comp.setForeground(inherited ? FROM_DEFAULT : isOwn ? OWN
                         : javax.swing.UIManager.getColor(r.hot != null ? "TextField.foreground" : "ComboBox.foreground"));
-                    r.status.setText(!hostScope[0] ? " " : isOwn ? "own" : "default");
-                    r.status.setForeground(isOwn ? OWN : FROM_DEFAULT);
+                    // the host's own value, or a default other than the setting's own
+                    r.reset.setEnabled(hostScope[0] ? isOwn : !Config.builtIn(r.key).equals(def.get(r.key)));
+                    r.reset.setToolTipText(hostScope[0] ? "Back to the default" : "Back to the built-in default");
                 }
                 filling[0] = false;
                 ((java.awt.CardLayout) buttons.getLayout()).show(buttons, hostScope[0] ? "host" : "default");
@@ -429,12 +478,22 @@ final class Menu {
                     if (r.hot != null && v.equals(was))
                         return;                     // the same hotkey again: stays the default's
                     if (hostScope[0])
-                        own.put(r.key, v);          // changed: the current host's own
+                        own.put(r.key, v);          // the current host's own
                     else
                         def.put(r.key, v);
                     fill.run();
                 }
             };
+            r.reset.addActionListener(new ActionListener() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    if (hostScope[0])
+                        own.remove(r.key);          // follows the default again
+                    else
+                        def.put(r.key, Config.builtIn(r.key));
+                    fill.run();
+                }
+            });
             if (r.hot != null)
                 r.hot.onChange = changed;
             else
@@ -463,7 +522,27 @@ final class Menu {
             hostName.setFont(hostName.getFont().deriveFont(java.awt.Font.BOLD));
             hostRow.add(hostName);
         }
-        panel.add(hostRow, g);
+        // About KeyPasta: a small ? at the top right (macOS: Aqua's round help button)
+        javax.swing.JButton about = new javax.swing.JButton(Config.MAC ? "" : "?");
+        if (Config.MAC)
+            about.putClientProperty("JButton.buttonType", "help");
+        else
+            about.setMargin(new java.awt.Insets(0, 6, 0, 6));
+        about.setToolTipText("About KeyPasta");
+        about.setFocusable(false);
+        about.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                About.showViewer(javax.swing.SwingUtilities.getWindowAncestor((java.awt.Component) e.getSource()),
+                    HotkeyField.label(config.value(Config.HOTKEY)));
+            }
+        });
+        JPanel topRow = new JPanel(new java.awt.BorderLayout(10, 0));
+        topRow.add(hostRow, java.awt.BorderLayout.CENTER);
+        topRow.add(about, java.awt.BorderLayout.EAST);
+        g.fill = java.awt.GridBagConstraints.HORIZONTAL;
+        panel.add(topRow, g);
+        g.fill = java.awt.GridBagConstraints.NONE;
         final javax.swing.JToggleButton ownScope = new javax.swing.JToggleButton("Current host", hostScope[0]);
         final javax.swing.JToggleButton defScope = new javax.swing.JToggleButton("Default", !hostScope[0]);
         if (!host.isEmpty()) {
@@ -496,12 +575,7 @@ final class Menu {
             g.fill = java.awt.GridBagConstraints.NONE;
             JPanel text = new JPanel();
             text.setLayout(new BoxLayout(text, BoxLayout.Y_AXIS));
-            JPanel nameRow = new JPanel(new java.awt.FlowLayout(java.awt.FlowLayout.LEFT, 0, 0));
-            nameRow.add(new JLabel(r.label));
-            nameRow.add(Box.createHorizontalStrut(6));
-            r.status.setFont(r.status.getFont().deriveFont(r.status.getFont().getSize2D() - 2f));
-            r.status.setPreferredSize(new java.awt.Dimension(60, r.status.getPreferredSize().height));
-            nameRow.add(r.status);                  // own / default (current host), fixed width
+            JLabel nameRow = new JLabel(r.label);
             nameRow.setAlignmentX(0f);
             JLabel hint = new JLabel(r.hint);
             hint.setFont(hint.getFont().deriveFont(hint.getFont().getSize2D() - 2f));
@@ -514,7 +588,7 @@ final class Menu {
             g.anchor = java.awt.GridBagConstraints.EAST;
             g.fill = java.awt.GridBagConstraints.HORIZONTAL;
             g.insets = new java.awt.Insets(4, 0, 0, 0);
-            panel.add(r.comp, g);
+            panel.add(r.cell, g);
         }
         g.gridy++;
         g.gridx = 0;
@@ -557,14 +631,24 @@ final class Menu {
             if (r.box != null)
                 width = Math.max(width, r.box.getPreferredSize().width);
         for (Row r : rows) {
-            java.awt.Dimension d = new java.awt.Dimension(width + 12, r.comp.getPreferredSize().height);
-            r.comp.setPreferredSize(d);
-            r.comp.setMinimumSize(d);
+            java.awt.Dimension d = new java.awt.Dimension(width + 12 + 4 + r.reset.getPreferredSize().width,
+                r.comp.getPreferredSize().height);
+            r.cell.setPreferredSize(d);
+            r.cell.setMinimumSize(d);
         }
         fill.run();
 
-        int result = JOptionPane.showConfirmDialog(parent, panel, "KeyPasta Preferences",
-            JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        // hover texts stay while the pointer is there (Swing hides them after 4 s), for this dialog
+        javax.swing.ToolTipManager tips = javax.swing.ToolTipManager.sharedInstance();
+        int dismiss = tips.getDismissDelay();
+        tips.setDismissDelay(Integer.MAX_VALUE);
+        int result;
+        try {
+            result = JOptionPane.showConfirmDialog(parent, panel, "KeyPasta Preferences",
+                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+        } finally {
+            tips.setDismissDelay(dismiss);
+        }
         if (result != JOptionPane.OK_OPTION)
             return;
         config.defaults.clear();
@@ -575,7 +659,7 @@ final class Menu {
         Log.d("settings: default " + config.defaults + (host.isEmpty() ? "" : ", " + host + " own " + config.own));
     }
 
-    /** A host's own values in a few words: "Layout us · Caps Lock simplified". */
+    /** A host's own values in a few words: "layout us · toggle keys passthrough". */
     private static String summary(java.util.Map<String, String> own) {
         StringBuilder b = new StringBuilder();
         for (String k : Config.SETTINGS) {
@@ -585,7 +669,7 @@ final class Menu {
             boolean on = v.equals("true");
             String t = k.equals(Config.KEY_FIX) ? "keyboard fixes " + (on ? "on" : "off")
                 : k.equals(Config.SWAP) ? (on ? "Alt/Command swapped" : "Alt/Command not swapped")
-                : k.equals(Config.SIMPLE_CAPS) ? "Caps Lock " + (on ? "simplified" : "with LED syncing")
+                : k.equals(Config.TOGGLE) ? "toggle keys " + v
                 : k.equals(Config.PASTE) ? "paste " + (on ? "on" : "off")
                 : k.equals(Config.HOTKEY) ? "hotkey " + v
                 : k.equals(Config.LAYOUT) ? "layout " + v
@@ -646,37 +730,5 @@ final class Menu {
         };
         build[0].run();
         JOptionPane.showMessageDialog(parent, list, "Hosts with own settings", JOptionPane.PLAIN_MESSAGE);
-    }
-
-    /** Index of a layout code (or other: the last) in the dropdown. */
-    private static int layoutIndex(String code) {
-        int i = java.util.Arrays.asList(Layouts.CODES).indexOf(code);
-        return i >= 0 ? i : Layouts.CODES.length;
-    }
-
-    private static String layoutCode(int index) {
-        return index < Layouts.CODES.length ? Layouts.CODES[index] : "other";
-    }
-
-    /** Choices under their label, a little indented. */
-    private static JComponent choices(JComponent... parts) {
-        JPanel p = new JPanel();
-        p.setLayout(new BoxLayout(p, BoxLayout.Y_AXIS));
-        p.setBorder(javax.swing.BorderFactory.createEmptyBorder(0, 12, 0, 0));
-        for (JComponent c : parts)
-            p.add(left(c));
-        return left(p);
-    }
-
-    private static JComponent left(JComponent c) {
-        c.setAlignmentX(JComponent.LEFT_ALIGNMENT);
-        return c;
-    }
-
-    /** A readable name for the paste shortcut, e.g. "⌥⇧V" on macOS, "Alt+Shift+V" elsewhere. */
-    private static String hotkey(Config config) {
-        String mods = KeyEvent.getModifiersExText(config.pasteMods);
-        String key = KeyEvent.getKeyText(config.pasteKey);
-        return mods.isEmpty() ? key : mods + "+" + key;
     }
 }

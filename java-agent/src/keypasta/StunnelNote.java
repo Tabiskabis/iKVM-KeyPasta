@@ -51,7 +51,7 @@ final class StunnelNote {
 
     /** From the class loading of IPMIView's main class: AWT only from a thread of its own. */
     static synchronized void install() {
-        if (started || !Icons.isMac())
+        if (started || !Config.MAC)
             return;
         if (stunnelInstalled()) {
             Log.d("Homebrew stunnel found: no note below IPMIView's Launch KVM Console button");

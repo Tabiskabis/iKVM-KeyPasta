@@ -284,15 +284,12 @@ fi
 # account.properties (saved IDs and passwords) are the Mac's, in
 # ~/Library/Application Support/IPMIView (mounted at /settings by run.sh), where the native start
 # (ipmiview-keypasta.sh) keeps them too: both share them. It runs in $WORK, which links to everything in IPMIView's folder (it finds its files
-# relative to the folder it runs in) and to those two in /settings. Settings found in IPMIView's
-# folder move there once, as the native start does. IPMIView won't start without the two files:
-# empty ones if absent.
+# relative to the folder it runs in) and to those two in /settings. Nothing is copied or moved
+# there from IPMIView's folder (up to the user). IPMIView won't start without the two files:
+# empty ones in /settings if absent.
 SHARED="IPMIView.properties account.properties"
 mkdir -p /settings
 for f in $SHARED; do
-    if [ -f "$f" ] && [ ! -L "$f" ] && [ ! -e "/settings/$f" ]; then
-        mv "$f" "/settings/$f" && log "moved $f to the Mac's IPMIView settings folder"
-    fi
     [ -e "/settings/$f" ] || : > "/settings/$f"
 done
 rm -rf "$WORK"

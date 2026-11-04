@@ -27,6 +27,13 @@ MAC="$(cd .. && pwd)"                 # the mac/ folder
 APP="IPMIView+iKVM KeyPasta launcher.app"
 EXEC="IPMIViewKeyPasta"
 ID="iKVM-KeyPasta"
+# .jnlp files' type: macOS lists an app under Open With by the type (UTI) it claims, a claim by
+# extension alone (CFBundleTypeExtensions) isn't enough. macOS defines .jnlp's type itself (for its
+# JavaLauncher): a type of the app's own for .jnlp lost to it and was never used. Their icon, with
+# this app as their default: the app's (none: plain text). Not macOS's page with the app's icon
+# (CFBundleTypeIconSystemGenerated): Launch Services then registered no icon at all, the text icon
+# stayed (the app's icon is a plain .icns, no asset catalog).
+JNLP_UTI="com.sun.java-web-start"
 # The agent jar: the project's, at its top folder, built first every time with java-agent/build.sh
 # (needs a JDK 9 or newer) if the project's java-agent folder is here. That fails: the jar already
 # there, with a warning.
@@ -72,9 +79,10 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <array>
         <dict>
             <key>CFBundleTypeName</key>        <string>Java Web Start</string>
-            <key>CFBundleTypeExtensions</key>  <array><string>jnlp</string></array>
+            <key>LSItemContentTypes</key>      <array><string>$JNLP_UTI</string></array>
             <key>CFBundleTypeRole</key>        <string>Viewer</string>
             <key>LSHandlerRank</key>           <string>Alternate</string>
+            <key>CFBundleTypeIconFile</key>    <string>AppIcon</string>
         </dict>
     </array>
 </dict>
@@ -85,7 +93,7 @@ mkdir -p build-arch
 for arch in $ARCHS; do
     echo "Compiling ($arch, macOS $MIN_MACOS and newer)…"
     swiftc -O -parse-as-library -target "$arch-apple-macos$MIN_MACOS" -o "build-arch/$EXEC-$arch" \
-        IPMIViewKeyPasta.swift -framework SwiftUI -framework AppKit
+        IPMIViewKeyPasta.swift -framework SwiftUI -framework AppKit -framework IOKit
 done
 lipo -create -output "$APP/Contents/MacOS/$EXEC" $(for arch in $ARCHS; do echo "build-arch/$EXEC-$arch"; done)
 rm -rf build-arch

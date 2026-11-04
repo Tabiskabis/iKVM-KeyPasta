@@ -24,6 +24,7 @@ fltmc >nul 2>&1
 if errorlevel 1 goto :elevate
 :: admin already
 call :remove
+if errorlevel 1 goto :incomplete
 goto :done
 
 :elevate
@@ -36,6 +37,7 @@ if errorlevel 99 (
     pause
     exit /b 1
 )
+if errorlevel 1 goto :incomplete
 goto :done
 
 :elevated
@@ -45,6 +47,12 @@ if errorlevel 1 (
     exit /b 1
 )
 exit /b 0
+
+:incomplete
+echo.
+>&2 echo Incomplete: not everything could be removed ^(the FAILED files in the list^).
+pause
+exit /b 1
 
 :done
 echo.
@@ -83,7 +91,7 @@ exit /b 1
 :unregister
 reg delete "HKCU\Software\Classes\%PROGID%" /f >nul 2>&1
 reg delete "HKCU\Software\Classes\.jnlp\OpenWithProgids" /v "%PROGID%" /f >nul 2>&1
-powershell -NoProfile -Command "Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Startup')) 'iKVM-KeyPasta.lnk'), (Join-Path ([Environment]::GetFolderPath('Programs')) 'IPMIView with KeyPasta.lnk'), (Join-Path ([Environment]::GetFolderPath('Programs')) 'IPMIView (iKVM-KeyPasta).lnk') -ErrorAction SilentlyContinue"
+powershell -NoProfile -Command "Remove-Item -LiteralPath (Join-Path ([Environment]::GetFolderPath('Startup')) 'iKVM-KeyPasta.lnk'), (Join-Path ([Environment]::GetFolderPath('Programs')) 'IPMIView with KeyPasta.lnk') -ErrorAction SilentlyContinue"
 echo   .jnlp launcher registration, IPMIView Start menu and autostart shortcuts removed.
 exit /b 0
 

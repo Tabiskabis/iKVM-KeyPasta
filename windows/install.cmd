@@ -74,6 +74,7 @@ exit /b 1
 :: That fails: the jar already there (one folder up or next to this file), with a warning; none:
 :: JARFAILED.
 :buildjar
+echo Building Java agent
 call "%SRC%..\java-agent\build.cmd"
 if not errorlevel 1 exit /b 0
 if exist "%SRC%..\iKVM-KeyPasta-agent.jar" goto :oldjar

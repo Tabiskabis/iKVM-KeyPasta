@@ -31,6 +31,7 @@ import java.io.File;
 final class Config {
     static final boolean MAC = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("mac");
     static final boolean LINUX = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("linux");
+    static final boolean WINDOWS = System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows");
 
     // (constants only: KeyEvent's own code would load AWT into every Java program, see resolvePaste)
     int pasteKey = KeyEvent.VK_V;
@@ -59,9 +60,6 @@ final class Config {
 
     boolean enablePaste = true;    // the paste hotkey
     boolean enableKeyFix = true;   // the keyboard position / Ctrl / lock-key fixes
-    /** Simplify Caps Lock (Windows, Linux; macOS always): no LED reading or syncing, a CapsLock
-     *  press sends the local state once, as on a Mac (see Native). */
-    boolean simpleCaps = false;
     boolean pasteSafe = false;     // false = fast (remoteLayout), true = safe (alt codes, any layout)
     private boolean swap = false;  // Alt and Command (Windows key) swapped
 
@@ -69,29 +67,35 @@ final class Config {
      * The settings of the viewer's KeyPasta Preferences, each with a default and, per host (the
      * BMC in the viewer's title, see KeyFix.bmcOf), a value of its own or none, as text:
      * booleans "true"/"false", the layout a code of Layouts.CODES or "other" (Alt codes), the
-     * non-ASCII choice ask/always/never, the hotkey as paste= takes it. Kept in a file, the same
+     * non-ASCII choice ask/always/never, toggle keys unaltered/passthrough/both,
+     * the hotkey as paste= takes it. Kept in a file, the same
      * on every system (see file()): "setting=value" the default, "setting@host=value" a host's.
      */
-    static final String KEY_FIX = "enableKeyFix", SWAP = "swapAltCmd", SIMPLE_CAPS = "simpleCaps",
+    static final String KEY_FIX = "enableKeyFix", SWAP = "swapAltCmd", TOGGLE = "toggleKeys",
         PASTE = "enablePaste", HOTKEY = "pasteHotkey", LAYOUT = "remoteLayout", NON_ASCII = "pasteNonAscii",
         REMOTE_WINDOWS = "remoteWindows";
-    static final String[] SETTINGS = {KEY_FIX, SWAP, SIMPLE_CAPS, PASTE, HOTKEY, LAYOUT, NON_ASCII, REMOTE_WINDOWS};
+    static final String[] SETTINGS = {KEY_FIX, SWAP, TOGGLE, PASTE, HOTKEY, LAYOUT, NON_ASCII, REMOTE_WINDOWS};
     /** The defaults, every setting there. */
     final java.util.Map<String, String> defaults = new java.util.HashMap<String, String>();
     /** The current host's own values (only those it has). */
     final java.util.Map<String, String> own = new java.util.HashMap<String, String>();
-    /** The default layout and swap said (the option or the dialog): fast paste doesn't ask. */
-    boolean layoutSaid, swapSaid;
+    /** The default layout said (the option or the dialog): fast paste doesn't ask. */
+    boolean layoutSaid;
 
     {
         defaults.put(KEY_FIX, "true");
         defaults.put(SWAP, "false");
-        defaults.put(SIMPLE_CAPS, "false");
+        defaults.put(TOGGLE, "both");          // every system alike
         defaults.put(PASTE, "true");
         defaults.put(HOTKEY, DEFAULT_HOTKEY);
         defaults.put(LAYOUT, "de-CH");      // until loadPrefs: the local one (not in premain, see there)
         defaults.put(NON_ASCII, "ask");
         defaults.put(REMOTE_WINDOWS, "false");
+    }
+
+    /** A setting's own default, before options and the file (the layout: the local one). */
+    static String builtIn(String k) {
+        return k.equals(LAYOUT) ? LocalLayouts.remoteDefault() : new Config().defaults.get(k);
     }
 
     static Config parse(String args) {
@@ -134,10 +138,8 @@ final class Config {
                     c.mouseRate = Math.max(0, Integer.parseInt(value));
                 else if (name.equals("log"))
                     c.log = value;
-                else if (name.equals("swapAltCmd")) {
+                else if (name.equals("swapAltCmd"))
                     c.defaults.put(SWAP, oneOf(value, "true", "false"));
-                    c.swapSaid = true;
-                }
                 else
                     throw new IllegalArgumentException("unknown option");
             } catch (RuntimeException e) {
@@ -293,7 +295,7 @@ final class Config {
             String home = System.getProperty("user.home", ".");
             if (MAC)
                 dir = home + "/Library/Application Support/iKVM-KeyPasta";
-            else if (System.getProperty("os.name", "").toLowerCase(Locale.ROOT).startsWith("windows")) {
+            else if (WINDOWS) {
                 String appData = env("APPDATA");
                 dir = (appData != null ? appData : home + "\\AppData\\Roaming") + "\\iKVM-KeyPasta";
             } else {
@@ -394,8 +396,6 @@ final class Config {
                 defaults.put(k, v);
                 if (k.equals(LAYOUT))
                     layoutSaid = true;
-                if (k.equals(SWAP))
-                    swapSaid = true;
             }
         }
         // The default layout said nowhere (option, file): the first of the four installed here.
@@ -416,6 +416,8 @@ final class Config {
             return v.equals("ask") || v.equals("always") || v.equals("never");
         if (k.equals(HOTKEY))
             return validHotkey(v);
+        if (k.equals(TOGGLE))
+            return v.equals("unaltered") || v.equals("passthrough") || v.equals("both");
         return v.equals("true") || v.equals("false");
     }
 
@@ -483,8 +485,7 @@ final class Config {
     void applyHost() {
         enableKeyFix = Boolean.parseBoolean(value(KEY_FIX));
         swap = Boolean.parseBoolean(value(SWAP));
-        simpleCaps = Boolean.parseBoolean(value(SIMPLE_CAPS));
-        Native.simpleCaps = simpleCaps;
+        Native.toggle = value(TOGGLE);
         enablePaste = Boolean.parseBoolean(value(PASTE));
         applyHotkey();
         pasteNonAscii = value(NON_ASCII);
@@ -517,7 +518,7 @@ final class Config {
         java.util.Properties p = read();
         for (String k : SETTINGS)
             p.setProperty(k, defaults.get(k));
-        layoutSaid = swapSaid = true;
+        layoutSaid = true;
         if (bmc != null && !bmc.isEmpty())
             for (String k : SETTINGS) {
                 if (own.containsKey(k))

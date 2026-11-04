@@ -44,7 +44,7 @@ if (ExitOnly) {             ; no tray icon, no hotkeys while it waits for the ot
 ; Individual Configuration (* is the suggested default)
 ; RemoteLayoutSetting, PasteInOtherApps, PasteNonAscii and RemoteWindows are the defaults. The
 ; tray menu changes them and saves its choices in the registry (HKCU\Software\iKVM-KeyPasta),
-; which then win over these.
+; which then win over these. Suspend hotkeys is kept there too.
 
 PasteHotkey := "!+v"        ; * Alt+Shift+V: paste hotkey, AutoHotkey style: modifiers (^ Ctrl, ! Alt,
                             ;   + Shift, # Win), then the key: by its letter like Ctrl+V, so on
@@ -115,6 +115,7 @@ if (SavedSetting ~= "^(ask|always|never)$")
 SavedSetting := RegRead(SettingsRegKey, "RemoteWindows", "")
 if (SavedSetting != "")
     RemoteWindows := SavedSetting != 0
+StartSuspended := RegRead(SettingsRegKey, "HotkeysSuspended", 0) != 0   ; see PauseResume
 RemoteLayoutChosen := RemoteLayoutSetting != "auto"    ; said by the user: a paste doesn't ask about it
 for Arg in A_Args {
     if (RegExMatch(Arg, "i)^/elevate-stage=(\w+)$", &Match))
@@ -128,7 +129,12 @@ for Arg in A_Args {
         case "PasteNonAscii":       PasteNonAscii := (Match[2] = "ask") ? "ask" : Integer(Match[2])
         case "RemoteWindows":       RemoteWindows := Integer(Match[2])
         case "CtrlAltDelQuietUntil": CtrlAltDelQuietUntil := Match[2]
+        case "Suspended":           StartSuspended := Integer(Match[2])
     }
+}
+if (StartSuspended and !ExitOnly) {
+    Suspend true
+    SetTrayIcon(true)
 }
 
 ; Remote layouts for fast paste: setting -> KLID and name (tray menu order)
@@ -231,6 +237,7 @@ RestartPrivileged(Notify := true) {
         . " /set:PasteNonAscii=" PasteNonAscii
         . " /set:RemoteWindows=" RemoteWindows
         . " /set:CtrlAltDelQuietUntil=" CtrlAltDelQuietUntil
+        . " /set:Suspended=" (A_IsSuspended and !ExitOnly ? 1 : 0)
         . (ExitOnly ? " /exit" : "")
     if (ElevationStage = "" and !A_IsCompiled) {
         UiaPath := RegExReplace(A_AhkPath, "i)(?<!_UIA)\.exe$", "_UIA.exe")
@@ -1366,8 +1373,10 @@ SaveSetting(Name, Value, Type := "REG_SZ", Key := "") {
         Log("  " Name " not saved: " Err.Message)
 }
 
+; Kept for the next start (registry HotkeysSuspended)
 PauseResume(*) {
     Suspend -1  ; Toggle
+    SaveSetting("HotkeysSuspended", A_IsSuspended ? 1 : 0, "REG_DWORD")
     if (A_IsSuspended)
         UntellAllJava()
     else
