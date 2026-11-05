@@ -124,8 +124,11 @@ public final class Agent {
                 }
                 if (LOCAL_HOST_USERS.contains(name))
                     return Patch.redirectLocalHost(bytes);      // loopback instead of the own address lookup (see LocalHost)
-                if (name != null && name.startsWith(Icons.IPMIVIEW_MAIN + "$"))
-                    return Patch.redirectDeviceModify(bytes);   // the device editor's OK: its account follows a rename (IPMIViewLogin)
+                if (name != null && name.startsWith(Icons.IPMIVIEW_MAIN + "$")) {
+                    byte[] out = Patch.redirectDeviceModify(bytes);   // the device editor's OK: its account follows a rename (IPMIViewLogin)
+                    byte[] address = Patch.redirectDeviceAddress(out != null ? out : bytes);   // its hostname kept (DeviceAddress)
+                    return address != null ? address : out;
+                }
                 if ("IPMIView20/IPMISession".equals(name))
                     return Patch.redirectSensorsTab(bytes);     // sensors in the text view (see IPMIViewLogin)
                 if ("com/supermicro/ipmi/stunnel/StunnelUtility".equals(name)) {

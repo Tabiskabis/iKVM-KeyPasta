@@ -90,6 +90,11 @@ public final class IPMIViewLogin {
                             }
                     } else if (e.getID() == WindowEvent.WINDOW_OPENED && ((WindowEvent) e).getWindow() instanceof JDialog) {
                         About.opened(((WindowEvent) e).getWindow());
+                        try {
+                            DeviceAddress.editorOpened(((WindowEvent) e).getWindow());
+                        } catch (Exception x) {
+                            Log.d("device editor: no Cancel button: " + x);
+                        }
                         flashLogin((JDialog) ((WindowEvent) e).getWindow());
                     }
                 } catch (Throwable t) {
@@ -100,6 +105,13 @@ public final class IPMIViewLogin {
     }
 
     private static void loginView(final Component session) throws Exception {
+        try {       // "IP Address" -> "Host Address" (user): it may be a hostname now (DeviceAddress); English only
+            Object label = field(session, "jLabel4");
+            if (label instanceof javax.swing.JLabel && "IP Address".equals(((javax.swing.JLabel) label).getText()))
+                ((javax.swing.JLabel) label).setText("Host Address");
+        } catch (Exception e) {
+            Log.d("login view: address label not changed: " + e);
+        }
         Object field = session.getClass().getField("Password").get(session);
         if (field instanceof JPasswordField)
             reveal((JPasswordField) field);

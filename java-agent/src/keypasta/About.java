@@ -113,7 +113,9 @@ final class About {
         boolean windows = !Config.MAC && !Config.LINUX;
         StringBuilder s = head("IPMIView");
         item(s, "All settings files in IPMIView's settings folder (when it has one), none in its program folder.");
-        item(s, "Login view: an eye button shows the saved password.");
+        item(s, "A system added or edited with a hostname keeps the hostname (IPMIView stored its IP); names from the hosts file work."
+            + " The Add/Edit system dialog has a Cancel button (and Esc) and says when a name can't be resolved (OK again saves it anyway).");
+        item(s, "Login view: an eye button shows the saved password; \"Host Address\" instead of \"IP Address\".");
         item(s, "Saved ID and password: kept when a system is renamed, filled into the firmware update's login popup,"
             + " removed with the system (account.properties).");
         item(s, "Faster console launch: no fixed 4 seconds waiting for the tunnel"

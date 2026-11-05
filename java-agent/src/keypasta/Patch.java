@@ -443,6 +443,20 @@ final class Patch {
         }
     }
 
+    /** The device editor's hostname lookup and IP become DeviceAddress's (the hostname is kept). */
+    static byte[] redirectDeviceAddress(byte[] cf) {
+        try {
+            return redirect(cf.clone(), new String[][] {
+                {"org/xbill/DNS/Address", "getByName", "(Ljava/lang/String;)Ljava/net/InetAddress;", "static"},
+                {"java/net/InetAddress", "getHostAddress", "()Ljava/lang/String;"},
+                {"javax/swing/JOptionPane", "showMessageDialog", "(Ljava/awt/Component;Ljava/lang/Object;)V", "static"}},
+                "keypasta/DeviceAddress", "device hostname");
+        } catch (Throwable t) {
+            Log.d("device hostname redirect skipped: " + t);
+            return null;
+        }
+    }
+
     /** IPMISession's ComboTab.resetDefaultTab calls become IPMIViewLogin.resetDefaultTab (see IPMIViewLogin). */
     static byte[] redirectSensorsTab(byte[] cf) {
         try {
